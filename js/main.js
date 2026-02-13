@@ -2,6 +2,7 @@ import { dbLogin, dbUpdateClass, dbSync } from './core/db.js';
 import { showScreen, drawPlayers, drawClickMarker, log } from './ui/render.js';
 import { GAME_SETTINGS } from './config.js';
 import { initChat } from './systems/chat.js';
+import { initDialogSystem } from './systems/dialogs.js';
 
 // Глобальное состояние
 let currentUser = null;
@@ -78,6 +79,7 @@ function startGame() {
     
     // Запускаем чат
     initChat(currentUser);
+    initDialogSystem();
 
     log(`Добро пожаловать, ${currentUser.class}!`);
 
