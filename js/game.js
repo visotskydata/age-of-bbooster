@@ -27,27 +27,36 @@ function showScreen(screenId) {
 // --- Логин / Регистрация ---
 async function tryLogin() {
     const l = document.getElementById('login-input').value;
-    if (!l) return alert("Введите логин!");
+    const p = document.getElementById('pass-input').value; // Берем пароль
 
-    // 1. Проверяем, есть ли такой игрок
-    const { data, error } = await db
+    if (!l || !p) return alert("Введите логин и пароль!");
+
+    // 1. Ищем игрока по логину
+    const { data: user, error } = await db
         .from('players')
         .select('*')
         .eq('login', l)
-        .single(); // Ищем одного
+        .single();
 
-    if (data) {
-        // Игрок найден, загружаем
-        currentUser = data;
-        if (!currentUser.class) {
-            showScreen('screen-class');
+    if (user) {
+        // Игрок найден. Проверяем пароль.
+        if (user.pass === p) {
+            // Пароль верный — входим
+            currentUser = user;
+            if (!currentUser.class) {
+                showScreen('screen-class');
+            } else {
+                startGame();
+            }
         } else {
-            startGame();
+            // Пароль неверный
+            alert("Неверный пароль! Этот логин уже занят.");
         }
     } else {
-        // Игрока нет, создаем нового
+        // Игрока нет, создаем нового с паролем
         const newPlayer = {
             login: l,
+            pass: p, // Сохраняем пароль!
             x: 180,
             y: 450,
             last_active: Date.now()
