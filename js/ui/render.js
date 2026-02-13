@@ -1,24 +1,46 @@
-// js/ui/render.js
 import { SKINS } from '../config.js';
+import { TEMPLATES } from './templates.js'; // Импортируем наши шаблоны
 
-const mapElement = document.getElementById('world-map');
-const consoleDiv = document.getElementById('log-console');
+// Глобальные ссылки (будут обновляться при смене экрана)
+let mapElement = null;
+let consoleDiv = null;
 
-// Переключение экранов
-export function showScreen(screenId) {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-    document.getElementById(screenId).classList.add('active');
+// --- ГЛАВНАЯ ФУНКЦИЯ ПЕРЕКЛЮЧЕНИЯ ЭКРАНОВ ---
+export function showScreen(screenName) {
+    const container = document.getElementById('game-container');
+    
+    // 1. Очищаем контейнер (удаляем старый экран)
+    container.innerHTML = '';
+
+    // 2. Вставляем новый HTML из шаблона
+    if (screenName === 'menu') {
+        container.innerHTML = TEMPLATES.menu;
+    } else if (screenName === 'login') {
+        container.innerHTML = TEMPLATES.login;
+    } else if (screenName === 'class') {
+        container.innerHTML = TEMPLATES.classSelection;
+    } else if (screenName === 'game') {
+        container.innerHTML = TEMPLATES.game;
+        
+        // После отрисовки обновляем ссылки на элементы, так как они создались заново
+        mapElement = document.getElementById('world-map');
+        consoleDiv = document.getElementById('log-console');
+    }
 }
 
-// Лог в консоль игры
+// ... Остальные функции (log, drawPlayers, drawClickMarker) остаются почти такими же ...
+
 export function log(msg) {
-    consoleDiv.innerHTML = `> ${msg}<br>` + consoleDiv.innerHTML;
+    if (!consoleDiv) consoleDiv = document.getElementById('log-console');
+    if (consoleDiv) {
+        consoleDiv.innerHTML = `> ${msg}<br>` + consoleDiv.innerHTML;
+    }
 }
 
-// Отрисовка всех игроков
 export function drawPlayers(players, currentUserId) {
-    // Чистим старых игроков (сохраняя деревья!)
-    // Ищем только элементы с классом .player-char
+    if (!mapElement) mapElement = document.getElementById('world-map');
+    if (!mapElement) return; // Если мы не в игре, не рисуем
+
     const oldPlayers = document.querySelectorAll('.player-char');
     oldPlayers.forEach(p => p.remove());
 
@@ -30,8 +52,6 @@ export function drawPlayers(players, currentUserId) {
 
         const isMe = p.id === currentUserId;
         const skin = SKINS[p.class] || SKINS['default'];
-        
-        // Цвет ника: зеленый для меня, белый для остальных
         const nameColor = isMe ? '#0f0' : '#fff';
 
         el.innerHTML = `
@@ -44,8 +64,8 @@ export function drawPlayers(players, currentUserId) {
     });
 }
 
-// Эффект клика (крестик)
 export function drawClickMarker(x, y) {
+    if (!mapElement) return;
     const marker = document.createElement('div');
     marker.style.position = 'absolute';
     marker.style.left = x + 'px';
