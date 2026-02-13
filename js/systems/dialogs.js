@@ -13,29 +13,34 @@ function startNpcDialog(npcId) {
     const npcData = DIALOG_DATA[npcId];
     if (!npcData) return;
 
-    // 1. Получаем координаты героя
-    const hero = window.currentUserGlobal; // Берем из main.js
+    const hero = window.currentUserGlobal;
     if (!hero) return;
 
-    // 2. Считаем дистанцию (Формула: корень из (dx*dx + dy*dy))
+    // Считаем дистанцию
     const dist = Math.hypot(hero.x - npcData.x, hero.y - npcData.y);
 
-    // 3. Проверка дистанции (например, 70 пикселей - это радиус разговора)
     if (dist > 70) {
         // --- ГЕРОЙ ДАЛЕКО ---
-        
-        // Вычисляем точку, куда подойти (чуть правее или левее НПС)
-        // Например, подходим на позицию x+40, y+40
         const targetX = npcData.x + 40; 
         const targetY = npcData.y + 40;
 
-        // Вызываем движение (функция из main.js)
-        window.movePlayerTo(targetX, targetY);
+        // 1. Находим DOM-элемент нашего героя
+        const heroEl = document.querySelector(`.player-char[data-id="${hero.id}"]`);
 
-        // Ждем пока дойдет (500мс - время анимации transition в CSS + запас)
-        setTimeout(() => {
-            openDialogWindow(npcId);
-        }, 600);
+        // 2. Вешаем слушатель: "Когда закончишь двигаться..."
+        if (heroEl) {
+            // Очищаем старые слушатели (на всякий случай)
+            const onArrival = () => {
+                openDialogWindow(npcId);
+                heroEl.removeEventListener('transitionend', onArrival); // Убираем за собой
+            };
+
+            // { once: true } значит сработает один раз и удалится
+            heroEl.addEventListener('transitionend', onArrival, { once: true });
+        }
+
+        // 3. Запускаем движение
+        window.movePlayerTo(targetX, targetY);
         
     } else {
         // --- ГЕРОЙ РЯДОМ ---
