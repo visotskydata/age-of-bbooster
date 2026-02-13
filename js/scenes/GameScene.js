@@ -62,8 +62,24 @@ export class GameScene extends Phaser.Scene {
         treePositions.forEach(pos => {
             const tree = this.trees.create(pos.x, pos.y, 'tree');
             tree.setDepth(pos.y);
-            tree.body.setSize(50, 50); 
-            tree.body.setOffset(70, 200); 
+            
+            // ВАЖНО: Сначала обновляем тело, чтобы Phaser понял размеры картинки
+            tree.refreshBody();
+
+            // 1. Делаем хитбокс маленьким (только ствол)
+            // Например, 40% от ширины и 20% от высоты картинки
+            const newWidth = tree.width * 0.4;
+            const newHeight = tree.height * 0.2;
+
+            tree.body.setSize(newWidth, newHeight);
+
+            // 2. Сдвигаем хитбокс вниз по центру
+            // Offset X = (ШиринаКартинки - ШиринаХитбокса) / 2
+            // Offset Y = ВысотаКартинки - ВысотаХитбокса
+            tree.body.setOffset(
+                (tree.width - newWidth) / 2, 
+                tree.height - newHeight
+            );
         });
 
         // --- 4. НАШ ИГРОК ---
