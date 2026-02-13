@@ -1,4 +1,4 @@
-import { dbSync } from '../core/db.js'; // <--- 1. Импортируем синхронизацию
+import { dbSync } from '../core/db.js'; 
 
 export class GameScene extends Phaser.Scene {
     constructor() { super('GameScene'); }
@@ -22,7 +22,6 @@ export class GameScene extends Phaser.Scene {
         this.add.tileSprite(1000, 1000, 2000, 2000, 'grass');
 
         // --- 2. ДЕРЕВЬЯ (ФИКСИРОВАННЫЕ) ---
-        // Чтобы у всех карта была одинаковой, координаты должны быть жестко заданы
         const treePositions = [
             {x: 200, y: 300}, {x: 500, y: 100}, {x: 800, y: 600},
             {x: 1200, y: 400}, {x: 1500, y: 800}, {x: 300, y: 1000},
@@ -31,7 +30,7 @@ export class GameScene extends Phaser.Scene {
 
         treePositions.forEach(pos => {
             const tree = this.add.image(pos.x, pos.y, 'tree');
-            tree.setDepth(pos.y); // Сортировка по глубине
+            tree.setDepth(pos.y); 
         });
 
         // --- 3. НАШ ИГРОК ---
@@ -60,7 +59,6 @@ export class GameScene extends Phaser.Scene {
         });
 
         // --- 6. ЗАПУСК СЕТЕВОГО ЦИКЛА ---
-        // Запускаем синхронизацию каждые 1000 мс (1 секунда)
         this.time.addEvent({
             delay: 1000,
             callback: this.syncNetwork,
@@ -68,7 +66,6 @@ export class GameScene extends Phaser.Scene {
             loop: true
         });
         
-        // Запускаем первый раз сразу
         this.syncNetwork();
     }
 
@@ -78,24 +75,17 @@ export class GameScene extends Phaser.Scene {
         this.targetMarker.setPosition(x, y).setVisible(true);
         this.physics.moveToObject(this.player, this.target, 200);
         
-        // Обновляем координаты в локальном объекте сразу
         this.currentUser.x = x;
         this.currentUser.y = y;
     }
 
-    // --- ФУНКЦИЯ СЕТЕВОЙ СИНХРОНИЗАЦИИ ---
     async syncNetwork() {
         if (!this.player) return;
 
-        // 1. Обновляем свои координаты в объекте перед отправкой
-        // (Phaser меняет this.player.x, но нам надо обновить this.currentUser для отправки)
         this.currentUser.x = Math.round(this.player.x);
         this.currentUser.y = Math.round(this.player.y);
 
-        // 2. Отправляем в Supabase и получаем список других
         const serverPlayers = await dbSync(this.currentUser);
-
-        // 3. Рисуем других игроков
         this.updateOtherPlayers(serverPlayers);
     }
 
@@ -111,30 +101,21 @@ export class GameScene extends Phaser.Scene {
 
             if (otherPlayer) {
                 // --- ОБНОВЛЕНИЕ (ПЛАВНОЕ) ---
-                
-                // 1. Разворот спрайта (Флип)
-                // Если новая координата левее текущей - зеркалим
                 if (pData.x < otherPlayer.x) {
                     otherPlayer.setFlipX(true);
                 } else if (pData.x > otherPlayer.x) {
                     otherPlayer.setFlipX(false);
                 }
 
-                // 2. Плавное движение (Tween)
-                // Мы останавливаем предыдущую анимацию, если она была, и запускаем новую
                 this.tweens.add({
                     targets: otherPlayer,
                     x: pData.x,
                     y: pData.y,
-                    duration: 1000, // Длительность равна интервалу обновления (1 сек)
-                    ease: 'Linear'  // Равномерная скорость
+                    duration: 1000, 
+                    ease: 'Linear'
                 });
 
-                // Z-index обновляем сразу
                 otherPlayer.setDepth(pData.y);
-                
-                // ВАЖНО: Мы НЕ двигаем текст здесь, мы будем двигать его в update(),
-                // чтобы он приклеился к плавно едущему игроку.
 
             } else {
                 // --- СОЗДАНИЕ ---
@@ -151,21 +132,11 @@ export class GameScene extends Phaser.Scene {
             }
         });
 
-        // --- УДАЛЕНИЕ ---
+        // --- УДАЛЕНИЕ (Был дубль, теперь один раз) ---
         this.otherPlayers.getChildren().forEach(child => {
             if (!activeIds.has(child.playerId)) {
                 child.nameText.destroy(); 
                 child.destroy();          
-            }
-        });
-    }
-
-        // --- УДАЛЕНИЕ ---
-        // Удаляем тех, кого нет в списке с сервера (кто вышел)
-        this.otherPlayers.getChildren().forEach(child => {
-            if (!activeIds.has(child.playerId)) {
-                child.nameText.destroy(); // Удаляем ник
-                child.destroy();          // Удаляем спрайт
             }
         });
     }
@@ -188,10 +159,9 @@ export class GameScene extends Phaser.Scene {
             this.nameText.setDepth(this.player.y + 1);
         }
 
-        // --- НОВОЕ: ОБНОВЛЕНИЕ НИКНЕЙМОВ ДРУГИХ ИГРОКОВ ---
+        // --- ОБНОВЛЕНИЕ НИКНЕЙМОВ ДРУГИХ ИГРОКОВ ---
         this.otherPlayers.getChildren().forEach(p => {
             if (p.nameText) {
-                // Никнейм всегда висит над головой, даже во время анимации
                 p.nameText.setPosition(p.x, p.y - 40);
                 p.nameText.setDepth(p.y + 1);
             }
