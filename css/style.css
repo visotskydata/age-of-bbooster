@@ -279,7 +279,16 @@ button:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #000; }
 }
 
 #dialog-npc-name { color: #FFD700; margin-top: 0; text-transform: uppercase; }
-#dialog-text { color: white; font-size: 12px; line-height: 1.5; margin: 20px 0; }
+#dialog-text { 
+    color: white; 
+    font-size: 12px; 
+    line-height: 1.5; 
+    margin: 20px 0;
+    
+    /* --- ВАЖНОЕ ИСПРАВЛЕНИЕ --- */
+    white-space: pre-wrap; 
+    /* Это заставит браузер рисовать пробелы, даже если они в конце строки */
+}
 
 .dialog-btn {
     display: block;
