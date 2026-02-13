@@ -4,7 +4,7 @@ export class GameScene extends Phaser.Scene {
     constructor() { super('GameScene'); }
 
     preload() {
-        // ВАЖНО: Грузим героя как SPRITESHEET (нарезку кадров), а не как image
+        // Грузим спрайтшит (32x48 - размер одного кадра)
         this.load.spritesheet('hero', 'https://labs.phaser.io/assets/sprites/phaser-dude.png', { 
             frameWidth: 32, frameHeight: 48 
         });
@@ -22,29 +22,35 @@ export class GameScene extends Phaser.Scene {
         this.physics.world.setBounds(0, 0, 2000, 2000);
         this.add.tileSprite(1000, 1000, 2000, 2000, 'grass');
 
-        // --- 2. АНИМАЦИИ (Создаем один раз) ---
-        this.anims.create({
-            key: 'left',
-            frames: this.anims.generateFrameNumbers('hero', { start: 0, end: 3 }),
-            frameRate: 10,
-            repeat: -1 // Бесконечно
-        });
+        // --- 2. АНИМАЦИИ ---
+        // Проверяем, есть ли анимация, чтобы не создавать дубликаты при перезапуске сцены
+        if (!this.anims.exists('left')) {
+            this.anims.create({
+                key: 'left',
+                frames: this.anims.generateFrameNumbers('hero', { start: 0, end: 3 }),
+                frameRate: 10,
+                repeat: -1
+            });
+        }
 
-        this.anims.create({
-            key: 'turn',
-            frames: [ { key: 'hero', frame: 4 } ],
-            frameRate: 20
-        });
+        if (!this.anims.exists('turn')) {
+            this.anims.create({
+                key: 'turn',
+                frames: [ { key: 'hero', frame: 4 } ],
+                frameRate: 20
+            });
+        }
 
-        this.anims.create({
-            key: 'right',
-            frames: this.anims.generateFrameNumbers('hero', { start: 5, end: 8 }),
-            frameRate: 10,
-            repeat: -1
-        });
+        if (!this.anims.exists('right')) {
+            this.anims.create({
+                key: 'right',
+                frames: this.anims.generateFrameNumbers('hero', { start: 5, end: 8 }),
+                frameRate: 10,
+                repeat: -1
+            });
+        }
 
-        // --- 3. ДЕРЕВЬЯ (ТВЕРДЫЕ) ---
-        // Используем staticGroup - это группа неподвижных твердых объектов
+        // --- 3. ДЕРЕВЬЯ ---
         this.trees = this.physics.add.staticGroup();
 
         const treePositions = [
@@ -54,10 +60,8 @@ export class GameScene extends Phaser.Scene {
         ];
 
         treePositions.forEach(pos => {
-            // create добавляет объект в группу и на сцену
             const tree = this.trees.create(pos.x, pos.y, 'tree');
             tree.setDepth(pos.y);
-            // Делаем хитбокс дерева поменьше (только ствол), чтобы можно было ходить "за листвой"
             tree.body.setSize(50, 50); 
             tree.body.setOffset(70, 200); 
         });
@@ -70,7 +74,7 @@ export class GameScene extends Phaser.Scene {
         this.player.setCollideWorldBounds(true);
         this.player.setDepth(startY);
 
-        // Включаем коллизию (столкновение) Игрока с Деревьями
+        // Коллизия
         this.physics.add.collider(this.player, this.trees);
 
         this.nameText = this.add.text(startX, startY - 40, this.currentUser.login, {
@@ -89,7 +93,7 @@ export class GameScene extends Phaser.Scene {
             this.moveTo(worldPoint.x, worldPoint.y);
         });
 
-        // СИНХРОНИЗАЦИЯ (Уменьшил до 500мс для плавности, пока тестируем)
+        // СИНХРОНИЗАЦИЯ
         this.time.addEvent({
             delay: 500, 
             callback: this.syncNetwork,
@@ -104,7 +108,7 @@ export class GameScene extends Phaser.Scene {
         this.target.x = x;
         this.target.y = y;
         this.targetMarker.setPosition(x, y).setVisible(true);
-        this.physics.moveToObject(this.player, this.target, 200); // Скорость 200
+        this.physics.moveToObject(this.player, this.target, 200);
         
         this.currentUser.x = x;
         this.currentUser.y = y;
@@ -127,25 +131,24 @@ export class GameScene extends Phaser.Scene {
             let otherPlayer = this.otherPlayers.getChildren().find(p => p.playerId === pData.id);
 
             if (otherPlayer) {
-                // АНИМАЦИЯ ДЛЯ ДРУГИХ
-                // Если он двигается (координаты сменились), включаем анимацию
+                // АНИМАЦИЯ ЧУЖОГО ИГРОКА
                 if (otherPlayer.x !== pData.x || otherPlayer.y !== pData.y) {
                     if (pData.x < otherPlayer.x) otherPlayer.anims.play('left', true);
                     else if (pData.x > otherPlayer.x) otherPlayer.anims.play('right', true);
                 } else {
-                    otherPlayer.anims.play('turn'); // Стоит
+                    otherPlayer.anims.play('turn');
                 }
 
                 this.tweens.add({
                     targets: otherPlayer,
                     x: pData.x, y: pData.y,
-                    duration: 500, // Совпадает с таймером синхронизации
+                    duration: 500, 
                     ease: 'Linear'
                 });
                 otherPlayer.setDepth(pData.y);
 
             } else {
-                // Создание другого игрока
+                // СОЗДАНИЕ ЧУЖОГО ИГРОКА
                 const newSprite = this.add.sprite(pData.x, pData.y, 'hero');
                 newSprite.setTint(0xff0000); 
                 newSprite.playerId = pData.id; 
@@ -156,38 +159,37 @@ export class GameScene extends Phaser.Scene {
             }
         });
 
+        // УДАЛЕНИЕ (Теперь этот блок только один раз и внутри функции!)
         this.otherPlayers.getChildren().forEach(child => {
             if (!activeIds.has(child.playerId)) {
-                child.nameText.destroy(); child.destroy();          
+                child.nameText.destroy(); 
+                child.destroy();          
             }
         });
     }
 
     update() {
-        // --- ЛОГИКА ОСТАНОВКИ И АНИМАЦИИ ---
+        // --- ЛОГИКА ДВИЖЕНИЯ НАШЕГО ИГРОКА ---
         const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.target.x, this.target.y);
         
-        // Если игрок двигается
         if (this.player.body.speed > 0) {
-            
-            // Включаем анимацию ног
+            // Анимация ног
             if (this.player.body.velocity.x < 0) {
                 this.player.anims.play('left', true);
             } else if (this.player.body.velocity.x > 0) {
                 this.player.anims.play('right', true);
             } else {
-                // Если идем чисто вверх/вниз, играем анимацию поворота или любую другую
                 this.player.anims.play('left', true); 
             }
 
-            // Проверка прибытия
+            // Прибытие
             if (distance < 5) {
                 this.player.body.reset(this.target.x, this.target.y);
                 this.targetMarker.setVisible(false);
-                this.player.anims.play('turn'); // Встали смирно
+                this.player.anims.play('turn'); 
             }
         } else {
-            this.player.anims.play('turn'); // Стоим
+            this.player.anims.play('turn'); 
         }
         
         // Z-Index и текст
