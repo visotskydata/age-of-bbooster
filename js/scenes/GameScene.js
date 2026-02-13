@@ -100,45 +100,65 @@ export class GameScene extends Phaser.Scene {
     }
 
     updateOtherPlayers(serverPlayers) {
-        // Создаем Set из ID пришедших игроков для быстрой проверки
         const activeIds = new Set();
 
         serverPlayers.forEach(pData => {
-            // Пропускаем себя
             if (pData.id === this.currentUser.id) return;
             
             activeIds.add(pData.id);
 
-            // Ищем, есть ли уже такой спрайт в нашей группе
-            // children.entries - это массив всех спрайтов в группе
             let otherPlayer = this.otherPlayers.getChildren().find(p => p.playerId === pData.id);
 
             if (otherPlayer) {
-                // --- ОБНОВЛЕНИЕ ---
-                // Если игрок уже есть, просто двигаем его
-                // Можно добавить плавную анимацию (tween), но пока просто телепорт
-                otherPlayer.setPosition(pData.x, pData.y);
+                // --- ОБНОВЛЕНИЕ (ПЛАВНОЕ) ---
+                
+                // 1. Разворот спрайта (Флип)
+                // Если новая координата левее текущей - зеркалим
+                if (pData.x < otherPlayer.x) {
+                    otherPlayer.setFlipX(true);
+                } else if (pData.x > otherPlayer.x) {
+                    otherPlayer.setFlipX(false);
+                }
+
+                // 2. Плавное движение (Tween)
+                // Мы останавливаем предыдущую анимацию, если она была, и запускаем новую
+                this.tweens.add({
+                    targets: otherPlayer,
+                    x: pData.x,
+                    y: pData.y,
+                    duration: 1000, // Длительность равна интервалу обновления (1 сек)
+                    ease: 'Linear'  // Равномерная скорость
+                });
+
+                // Z-index обновляем сразу
                 otherPlayer.setDepth(pData.y);
-                otherPlayer.nameText.setPosition(pData.x, pData.y - 40);
+                
+                // ВАЖНО: Мы НЕ двигаем текст здесь, мы будем двигать его в update(),
+                // чтобы он приклеился к плавно едущему игроку.
+
             } else {
                 // --- СОЗДАНИЕ ---
-                // Создаем нового спрайта
                 const newSprite = this.add.sprite(pData.x, pData.y, 'hero');
-                newSprite.setTint(0xff0000); // Покрасим врагов/друзей в красный, чтобы отличать
-                newSprite.playerId = pData.id; // Запоминаем ID внутри спрайта
+                newSprite.setTint(0xff0000); 
+                newSprite.playerId = pData.id; 
                 
-                // Создаем текст ника
                 const newText = this.add.text(pData.x, pData.y - 40, pData.login, {
                     font: '14px Arial', fill: '#ffcccc', stroke: '#000000', strokeThickness: 3
                 }).setOrigin(0.5);
                 
-                // Привязываем текст к спрайту, чтобы удалять вместе
                 newSprite.nameText = newText;
-
-                // Добавляем в группу
                 this.otherPlayers.add(newSprite);
             }
         });
+
+        // --- УДАЛЕНИЕ ---
+        this.otherPlayers.getChildren().forEach(child => {
+            if (!activeIds.has(child.playerId)) {
+                child.nameText.destroy(); 
+                child.destroy();          
+            }
+        });
+    }
 
         // --- УДАЛЕНИЕ ---
         // Удаляем тех, кого нет в списке с сервера (кто вышел)
