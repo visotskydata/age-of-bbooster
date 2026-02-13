@@ -1,4 +1,3 @@
-// js/main.js
 import { dbLogin, dbUpdateClass, dbSync } from './core/db.js';
 import { showScreen, drawPlayers, drawClickMarker, log } from './ui/render.js';
 import { GAME_SETTINGS } from './config.js';
@@ -8,9 +7,10 @@ import { initChat } from './systems/chat.js';
 let currentUser = null;
 let gameInterval = null;
 
+// Делаем функцию доступной глобально
 window.showScreen = showScreen;
 
-// --- ФУНКЦИИ УПРАВЛЕНИЯ (Привязываем к window для HTML кнопок) ---
+// --- ФУНКЦИИ УПРАВЛЕНИЯ ---
 
 // 1. Логин
 window.tryLogin = async function() {
@@ -26,7 +26,8 @@ window.tryLogin = async function() {
     } else {
         currentUser = result.user;
         if (!currentUser.class) {
-            showScreen('screen-class');
+            // ИСПРАВЛЕНО: было 'screen-class', стало 'class'
+            showScreen('class'); 
         } else {
             startGame();
         }
@@ -38,7 +39,7 @@ window.selectClass = async function(cls) {
     if (!currentUser) return;
     
     await dbUpdateClass(currentUser.id, cls);
-    currentUser.class = cls; // Обновляем локально
+    currentUser.class = cls;
     startGame();
 };
 
@@ -48,36 +49,35 @@ window.logout = function() {
     location.reload();
 };
 
-// 4. Движение (Клик по карте)
+// 4. Движение
 window.movePlayer = function(e) {
     if (!currentUser) return;
     
     const mapElement = document.getElementById('world-map');
-    // Игнорируем клики не по карте (если попали на UI элемент внутри)
     if (e.target !== mapElement && !e.target.classList.contains('tree')) return;
 
     const rect = mapElement.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // Обновляем локально мгновенно
     currentUser.x = Math.floor(x);
     currentUser.y = Math.floor(y);
 
     drawClickMarker(x, y);
-    // Принудительно вызываем обновление, чтобы не ждать таймера
     gameLoop(); 
 };
 
 // --- ИГРОВОЙ ЦИКЛ ---
 
 function startGame() {
-    showScreen('screen-game');
+    // ИСПРАВЛЕНО: было 'screen-game', стало 'game'
+    showScreen('game'); 
+
+    // Теперь элементы существуют, можно к ним обращаться
     document.getElementById('player-name-display').innerText = `${currentUser.login}`;
     
-    // --- ЗАПУСК СИСТЕМ ---
-    initChat(currentUser); // <--- ДОБАВИЛИ ВОТ ЭТО
-    // ---------------------
+    // Запускаем чат
+    initChat(currentUser);
 
     log(`Добро пожаловать, ${currentUser.class}!`);
 
@@ -89,13 +89,10 @@ function startGame() {
 async function gameLoop() {
     if (!currentUser) return;
 
-    // Синхронизация с базой
     const players = await dbSync(currentUser);
-    
-    // Отрисовка
     drawPlayers(players, currentUser.id);
 }
 
-// Инициализация при загрузке страницы
+// Инициализация
 console.log('Age of bbooster Heroes: Core loaded.');
-showScreen('menu');
+showScreen('menu'); // Тут было правильно, поэтому меню работало
