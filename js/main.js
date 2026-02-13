@@ -72,12 +72,16 @@ window.movePlayer = function(e) {
 function startGame() {
     showScreen('screen-game');
     document.getElementById('player-name-display').innerText = `${currentUser.login}`;
+    
+    // --- ЗАПУСК СИСТЕМ ---
+    initChat(currentUser); // <--- ДОБАВИЛИ ВОТ ЭТО
+    // ---------------------
+
     log(`Добро пожаловать, ${currentUser.class}!`);
 
-    // Запускаем цикл
     if (gameInterval) clearInterval(gameInterval);
     gameInterval = setInterval(gameLoop, GAME_SETTINGS.updateInterval);
-    gameLoop(); // Первый запуск сразу
+    gameLoop(); 
 }
 
 async function gameLoop() {
