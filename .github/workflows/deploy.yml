@@ -1,0 +1,40 @@
+name: Manual Deploy to Pages
+
+on:
+  # Эта строчка создает кнопку "Run workflow" для ручного запуска
+  workflow_dispatch:
+
+# Разрешаем права на деплой
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Настраиваем, чтобы один запуск отменял предыдущий (чтобы не копились очереди)
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  # Работа по деплою
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Загружаем всю папку репозитория '.'
+          path: '.'
+          
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
