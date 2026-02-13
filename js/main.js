@@ -6,6 +6,7 @@ import { initDialogSystem } from './systems/dialogs.js';
 
 // Глобальное состояние
 let currentUser = null;
+let cachedPlayers = []; // <--- 1. Добавили кэш
 let gameInterval = null;
 
 // Делаем функцию доступной глобально
@@ -51,14 +52,28 @@ window.logout = function() {
 };
 
 // --- ФУНКЦИЯ ПЕРЕМЕЩЕНИЯ (API) ---
-// Теперь мы можем вызвать movePlayerTo(100, 100) из любого места кода
 window.movePlayerTo = function(x, y) {
     if (!currentUser) return;
     
+    // 1. Обновляем координаты локально
     currentUser.x = Math.floor(x);
     currentUser.y = Math.floor(y);
     
-    // Принудительно обновляем (чтобы анимация началась сразу)
+    // 2. МГНОВЕННО перерисовываем, используя кэш (не ждем сервер)
+    // Находим себя в кэше и обновляем
+    const myIndex = cachedPlayers.findIndex(p => p.id === currentUser.id);
+    if (myIndex !== -1) {
+        cachedPlayers[myIndex].x = currentUser.x;
+        cachedPlayers[myIndex].y = currentUser.y;
+    } else {
+        // Если кэш пуст (первый ход), добавляем себя
+        cachedPlayers.push(currentUser);
+    }
+    
+    // Вызываем отрисовку сразу
+    drawPlayers(cachedPlayers, currentUser.id);
+    
+    // 3. А синхронизацию с сервером пускаем фоном
     gameLoop();
 };
 
@@ -105,9 +120,15 @@ function startGame() {
 // но проще всего привязать к window для нашей архитектуры:
 async function gameLoop() {
     if (!currentUser) return;
-    window.currentUserGlobal = currentUser; // <-- ВАЖНО для проверки дистанции
+    window.currentUserGlobal = currentUser;
 
+    // Синхронизация с базой
     const players = await dbSync(currentUser);
+    
+    // Сохраняем в кэш
+    cachedPlayers = players; // <--- Сохраняем свежие данные
+    
+    // Отрисовка
     drawPlayers(players, currentUser.id);
 }
 
