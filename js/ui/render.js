@@ -39,28 +39,65 @@ export function log(msg) {
 
 export function drawPlayers(players, currentUserId) {
     if (!mapElement) mapElement = document.getElementById('world-map');
-    if (!mapElement) return; // Если мы не в игре, не рисуем
+    if (!mapElement) return;
 
-    const oldPlayers = document.querySelectorAll('.player-char');
-    oldPlayers.forEach(p => p.remove());
+    // 1. Собираем список ID всех игроков, которые пришли с сервера
+    const activeIds = new Set(players.map(p => p.id));
 
+    // 2. Удаляем со страницы тех, кого больше нет в списке (кто вышел)
+    const existingElements = document.querySelectorAll('.player-char');
+    existingElements.forEach(el => {
+        const id = parseInt(el.getAttribute('data-id'));
+        if (!activeIds.has(id)) {
+            el.remove();
+        }
+    });
+
+    // 3. Рисуем или обновляем текущих
     players.forEach(p => {
-        const el = document.createElement('div');
-        el.className = 'player-char';
+        // Ищем, есть ли уже такой персонаж на карте
+        let el = document.querySelector(`.player-char[data-id="${p.id}"]`);
+
+        // Если нет — СОЗДАЕМ
+        if (!el) {
+            el = document.createElement('div');
+            el.className = 'player-char';
+            el.setAttribute('data-id', p.id); // Важная метка ID
+            mapElement.appendChild(el);
+            
+            // Внутренности создаем один раз
+            el.innerHTML = `
+                <span class="player-name"></span><br>
+                <span class="char-skin"></span>
+            `;
+        }
+
+        // --- ОБНОВЛЯЕМ ДАННЫЕ (это происходит каждый кадр) ---
+        
+        // 1. Координаты (CSS Transition сделает это плавным)
         el.style.left = p.x + 'px';
         el.style.top = p.y + 'px';
+        el.style.zIndex = Math.floor(p.y); // Чтобы тот кто ниже, перекрывал того кто выше
 
+        // 2. Разворот спрайта (Если идем влево — зеркалим)
+        // Мы храним прошлую координату X в атрибуте, чтобы сравнить
+        const oldX = parseFloat(el.getAttribute('data-last-x')) || p.x;
+        if (p.x < oldX) {
+            el.classList.add('flipped'); // Лицом влево
+        } else if (p.x > oldX) {
+            el.classList.remove('flipped'); // Лицом вправо
+        }
+        el.setAttribute('data-last-x', p.x); // Запоминаем X для следующего раза
+
+        // 3. Текст и Скин
         const isMe = p.id === currentUserId;
         const skin = SKINS[p.class] || SKINS['default'];
         const nameColor = isMe ? '#0f0' : '#fff';
 
-        el.innerHTML = `
-            <span class="player-name" style="color:${nameColor}">${p.login}</span><br>
-            ${skin}
-        `;
-        
-        el.style.zIndex = Math.floor(p.y);
-        mapElement.appendChild(el);
+        // Обновляем текст внутри спанов
+        el.querySelector('.player-name').style.color = nameColor;
+        el.querySelector('.player-name').innerText = p.login;
+        el.querySelector('.char-skin').innerText = skin;
     });
 }
 
