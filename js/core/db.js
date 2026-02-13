@@ -75,3 +75,24 @@ export async function dbSync(myUser) {
         
     return players || [];
 }
+
+// --- ЧАТ ---
+
+// Отправка сообщения
+export async function dbSendMessage(name, text) {
+    await supabase
+        .from('messages')
+        .insert([{ player_name: name, text: text }]);
+}
+
+// Получение последних 20 сообщений
+export async function dbGetMessages() {
+    const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .order('created_at', { ascending: false }) // Сначала новые
+        .limit(20);
+    
+    // Разворачиваем массив, чтобы старые были сверху (для правильного отображения)
+    return data ? data.reverse() : [];
+}
