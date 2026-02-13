@@ -39,7 +39,7 @@ export const TEMPLATES = {
         </div>
     `,
 
-    // 4. Игровой мир (Каркас)
+   // 4. Игровой мир
     game: `
         <div id="screen-game" class="screen active">
             <div id="ui-top">
@@ -49,8 +49,23 @@ export const TEMPLATES = {
             
             <div id="world-map" onclick="movePlayer(event)">
                 <div class="tree" style="top:50px; left:50px;">🌲</div>
-                <div class="tree" style="top:200px; left:250px;">🌲</div>
                 <div class="tree" style="top:350px; left:100px;">🌳</div>
+                
+                <div class="npc" onclick="event.stopPropagation(); startNpcDialog('visotsky')" 
+                     style="top:100px; left:300px;">
+                    <span class="npc-name">Высоцкий</span><br>
+                    🧙‍♂️
+                </div>
+            </div>
+
+            <div id="dialog-overlay" style="display: none;">
+                <div class="dialog-box">
+                    <h3 id="dialog-npc-name">Имя НПС</h3>
+                    <p id="dialog-text">Текст...</p>
+                    <div id="dialog-options">
+                        </div>
+                    <button class="close-dialog-btn" onclick="closeDialog()">Закрыть</button>
+                </div>
             </div>
 
             <div id="log-console">Добро пожаловать в мир bbooster...</div>
