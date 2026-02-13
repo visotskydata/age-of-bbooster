@@ -50,22 +50,34 @@ window.logout = function() {
     location.reload();
 };
 
-// 4. Движение
+// --- ФУНКЦИЯ ПЕРЕМЕЩЕНИЯ (API) ---
+// Теперь мы можем вызвать movePlayerTo(100, 100) из любого места кода
+window.movePlayerTo = function(x, y) {
+    if (!currentUser) return;
+    
+    currentUser.x = Math.floor(x);
+    currentUser.y = Math.floor(y);
+    
+    // Принудительно обновляем (чтобы анимация началась сразу)
+    gameLoop();
+};
+
+// 4. Движение (Клик по карте)
 window.movePlayer = function(e) {
     if (!currentUser) return;
     
     const mapElement = document.getElementById('world-map');
+    // Если клик был по НПС - игнорируем движение здесь, его обработает startNpcDialog
+    if (e.target.closest('.npc')) return; 
+
     if (e.target !== mapElement && !e.target.classList.contains('tree')) return;
 
     const rect = mapElement.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    currentUser.x = Math.floor(x);
-    currentUser.y = Math.floor(y);
-
     drawClickMarker(x, y);
-    gameLoop(); 
+    movePlayerTo(x, y); // Используем нашу новую функцию
 };
 
 // --- ИГРОВОЙ ЦИКЛ ---
@@ -88,8 +100,12 @@ function startGame() {
     gameLoop(); 
 }
 
+// Делаем currentUser доступным глобально (для диалогов, чтобы знать где мы стоим)
+// Добавь это в конце gameLoop или просто сделай экспорт геттера, 
+// но проще всего привязать к window для нашей архитектуры:
 async function gameLoop() {
     if (!currentUser) return;
+    window.currentUserGlobal = currentUser; // <-- ВАЖНО для проверки дистанции
 
     const players = await dbSync(currentUser);
     drawPlayers(players, currentUser.id);
