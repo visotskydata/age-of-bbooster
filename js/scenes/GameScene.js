@@ -180,12 +180,21 @@ export class GameScene extends Phaser.Scene {
             }
         }
         
-        // Z-Index и текст
+        // Z-Index и текст НАШЕГО игрока
         this.player.setDepth(this.player.y);
         if (this.nameText) {
             this.nameText.x = this.player.x;
             this.nameText.y = this.player.y - 40;
             this.nameText.setDepth(this.player.y + 1);
         }
+
+        // --- НОВОЕ: ОБНОВЛЕНИЕ НИКНЕЙМОВ ДРУГИХ ИГРОКОВ ---
+        this.otherPlayers.getChildren().forEach(p => {
+            if (p.nameText) {
+                // Никнейм всегда висит над головой, даже во время анимации
+                p.nameText.setPosition(p.x, p.y - 40);
+                p.nameText.setDepth(p.y + 1);
+            }
+        });
     }
 }
