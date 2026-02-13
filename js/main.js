@@ -8,6 +8,8 @@ import { initChat } from './systems/chat.js';
 let currentUser = null;
 let gameInterval = null;
 
+window.showScreen = showScreen;
+
 // --- ФУНКЦИИ УПРАВЛЕНИЯ (Привязываем к window для HTML кнопок) ---
 
 // 1. Логин
@@ -96,4 +98,4 @@ async function gameLoop() {
 
 // Инициализация при загрузке страницы
 console.log('Age of bbooster Heroes: Core loaded.');
-showScreen('screen-menu'); // Показываем меню старта
+showScreen('menu');
