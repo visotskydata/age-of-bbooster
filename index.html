@@ -4,15 +4,58 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Age of bbooster Heroes (Phaser)</title>
-    <style>
-        body { margin: 0; background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
-        /* Контейнер для игры */
-        #game-container { box-shadow: 0 0 20px #FFD700; }
-    </style>
+    <link rel="stylesheet" href="css/style.css"> <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <script type="module" src="js/main.js"></script>
+    <style>
+        body { margin: 0; background: #1a1a1a; overflow: hidden; font-family: 'Press Start 2P', cursive; }
+        
+        /* Контейнер игры скрыт по умолчанию */
+        #game-container { 
+            display: none; 
+            width: 100%; 
+            height: 100vh;
+        }
+
+        /* Меню поверх всего */
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none; /* Чтобы клики проходили сквозь пустые места */
+        }
+
+        /* Экраны меню */
+        .screen {
+            pointer-events: auto; /* А тут клики ловим */
+            background: rgba(0,0,0,0.85);
+            padding: 20px;
+            border: 2px solid #FFD700;
+            text-align: center;
+            display: none; /* Скрыты */
+        }
+        .screen.active { display: block; }
+        
+        input { display: block; margin: 10px auto; padding: 10px; width: 80%; }
+        button { padding: 10px 20px; cursor: pointer; background: #FFD700; border: none; font-weight: bold; }
+    </style>
 </head>
 <body>
+
     <div id="game-container"></div>
+
+    <div id="ui-layer">
+        
+        <div id="login-screen" class="screen active">
+            <h1 style="color:#FFD700">bbooster<br>Heroes</h1>
+            <input type="text" id="login-input" placeholder="Login">
+            <input type="password" id="pass-input" placeholder="Password">
+            <button id="btn-login">PLAY</button>
+        </div>
+
+    </div>
+
 </body>
 </html>
