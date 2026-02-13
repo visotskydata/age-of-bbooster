@@ -109,11 +109,21 @@ button:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #000; }
 .player-char {
     position: absolute;
     font-size: 30px;
-    transform: translate(-50%, -50%); /* Центрируем по координатам */
-    transition: top 0.5s linear, left 0.5s linear; /* Плавное движение */
+    transform: translate(-50%, -50%); /* Центрируем, чтобы координаты были в ногах */
     text-align: center;
     width: 60px;
     z-index: 5;
+
+    /* --- МАГИЯ АНИМАЦИИ --- */
+    /* Плавно меняем top и left за 0.3 секунды */
+    transition: top 0.3s linear, left 0.3s linear; 
+    /* ---------------------- */
+}
+
+/* Класс для разворота персонажа влево */
+.player-char.flipped .char-skin {
+    transform: scaleX(-1);
+    display: inline-block;
 }
 
 .player-name {
