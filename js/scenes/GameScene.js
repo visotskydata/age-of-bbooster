@@ -4,8 +4,8 @@ export class GameScene extends Phaser.Scene {
     constructor() { super('GameScene'); }
 
     preload() {
-        // Грузим спрайтшит (32x48 - размер одного кадра)
-        this.load.spritesheet('hero', 'https://labs.phaser.io/assets/sprites/phaser-dude.png', { 
+        // ИСПРАВЛЕНИЕ: Используем надежную ссылку с GitHub (raw), а не с labs.phaser.io
+        this.load.spritesheet('hero', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/dude.png', { 
             frameWidth: 32, frameHeight: 48 
         });
         
@@ -23,7 +23,7 @@ export class GameScene extends Phaser.Scene {
         this.add.tileSprite(1000, 1000, 2000, 2000, 'grass');
 
         // --- 2. АНИМАЦИИ ---
-        // Проверяем, есть ли анимация, чтобы не создавать дубликаты при перезапуске сцены
+        // Проверяем существование, чтобы не создавать дубли
         if (!this.anims.exists('left')) {
             this.anims.create({
                 key: 'left',
@@ -74,7 +74,6 @@ export class GameScene extends Phaser.Scene {
         this.player.setCollideWorldBounds(true);
         this.player.setDepth(startY);
 
-        // Коллизия
         this.physics.add.collider(this.player, this.trees);
 
         this.nameText = this.add.text(startX, startY - 40, this.currentUser.login, {
@@ -115,7 +114,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     async syncNetwork() {
-        if (!this.player) return;
+        if (!this.player) return; // Защита если игрок не создан
         this.currentUser.x = Math.round(this.player.x);
         this.currentUser.y = Math.round(this.player.y);
         const serverPlayers = await dbSync(this.currentUser);
@@ -131,7 +130,7 @@ export class GameScene extends Phaser.Scene {
             let otherPlayer = this.otherPlayers.getChildren().find(p => p.playerId === pData.id);
 
             if (otherPlayer) {
-                // АНИМАЦИЯ ЧУЖОГО ИГРОКА
+                // АНИМАЦИЯ
                 if (otherPlayer.x !== pData.x || otherPlayer.y !== pData.y) {
                     if (pData.x < otherPlayer.x) otherPlayer.anims.play('left', true);
                     else if (pData.x > otherPlayer.x) otherPlayer.anims.play('right', true);
@@ -148,7 +147,7 @@ export class GameScene extends Phaser.Scene {
                 otherPlayer.setDepth(pData.y);
 
             } else {
-                // СОЗДАНИЕ ЧУЖОГО ИГРОКА
+                // СОЗДАНИЕ
                 const newSprite = this.add.sprite(pData.x, pData.y, 'hero');
                 newSprite.setTint(0xff0000); 
                 newSprite.playerId = pData.id; 
@@ -159,21 +158,19 @@ export class GameScene extends Phaser.Scene {
             }
         });
 
-        // УДАЛЕНИЕ (Теперь этот блок только один раз и внутри функции!)
         this.otherPlayers.getChildren().forEach(child => {
             if (!activeIds.has(child.playerId)) {
-                child.nameText.destroy(); 
+                if (child.nameText) child.nameText.destroy(); 
                 child.destroy();          
             }
         });
     }
 
     update() {
-        // --- ЛОГИКА ДВИЖЕНИЯ НАШЕГО ИГРОКА ---
+        // ОСТАНОВКА И АНИМАЦИЯ НАШЕГО ИГРОКА
         const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.target.x, this.target.y);
         
         if (this.player.body.speed > 0) {
-            // Анимация ног
             if (this.player.body.velocity.x < 0) {
                 this.player.anims.play('left', true);
             } else if (this.player.body.velocity.x > 0) {
@@ -182,7 +179,6 @@ export class GameScene extends Phaser.Scene {
                 this.player.anims.play('left', true); 
             }
 
-            // Прибытие
             if (distance < 5) {
                 this.player.body.reset(this.target.x, this.target.y);
                 this.targetMarker.setVisible(false);
@@ -192,7 +188,6 @@ export class GameScene extends Phaser.Scene {
             this.player.anims.play('turn'); 
         }
         
-        // Z-Index и текст
         this.player.setDepth(this.player.y);
         if (this.nameText) {
             this.nameText.setPosition(this.player.x, this.player.y - 40).setDepth(this.player.y + 1);
