@@ -5,62 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Age of bbooster Heroes</title>
     <link rel="stylesheet" href="css/style.css">
-	<script type="module" src="js/main.js"></script>
+    <script type="module" src="js/main.js"></script>
 </head>
 <body>
-
-    <div id="game-container">
-        
-        <div id="screen-menu" class="screen active">
-            <h1 class="logo">Age of<br><span>bbooster</span><br>Heroes</h1>
-            <button onclick="showScreen('screen-login')">НАЧАТЬ ИГРУ</button>
-        </div>
-
-        <div id="screen-login" class="screen">
-            <h2>АВТОРИЗАЦИЯ</h2>
-            <input type="text" id="login-input" placeholder="Логин">
-            <input type="password" id="pass-input" placeholder="Пароль">
-            <button onclick="tryLogin()">ВОЙТИ / СОЗДАТЬ</button>
-            <p class="info">Если аккаунта нет, он создастся сам.</p>
-            <button class="btn-small" onclick="showScreen('screen-menu')">Назад</button>
-        </div>
-
-        <div id="screen-class" class="screen">
-            <h2>ВЫБЕРИ ГЕРОЯ</h2>
-            <div class="classes-row">
-                <div class="class-card" onclick="selectClass('warrior')">
-                    <div class="icon">⚔️</div>
-                    <div>Воин</div>
-                </div>
-                <div class="class-card" onclick="selectClass('mage')">
-                    <div class="icon">🧙‍♂️</div>
-                    <div>Маг</div>
-                </div>
-                <div class="class-card" onclick="selectClass('archer')">
-                    <div class="icon">🏹</div>
-                    <div>Лучник</div>
-                </div>
-            </div>
-        </div>
-
-        <div id="screen-game" class="screen">
-            <div id="ui-top">
-                <span id="player-name-display">Игрок</span>
-                <button onclick="logout()" class="btn-micro">Выход</button>
-            </div>
-            
-            <div id="world-map" onclick="movePlayer(event)">
-                <div class="tree" style="top:50px; left:50px;">🌲</div>
-                <div class="tree" style="top:200px; left:250px;">🌲</div>
-                <div class="tree" style="top:350px; left:100px;">🌳</div>
-                
-                </div>
-
-            <div id="log-console">Добро пожаловать в мир bbooster...</div>
-        </div>
-
-    </div>
-
-    <script src="js/game.js"></script>
+    <div id="game-container"></div>
 </body>
 </html>
