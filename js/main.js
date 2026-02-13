@@ -2,6 +2,7 @@
 import { dbLogin, dbUpdateClass, dbSync } from './core/db.js';
 import { showScreen, drawPlayers, drawClickMarker, log } from './ui/render.js';
 import { GAME_SETTINGS } from './config.js';
+import { initChat } from './systems/chat.js';
 
 // Глобальное состояние
 let currentUser = null;
