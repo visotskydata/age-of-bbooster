@@ -1,4 +1,4 @@
-import { GameScene } from './scenes/GameScene.js';
+import { Game3D } from './Game3D.js';
 import { dbLogin, dbSetClass, dbSendMessage, dbGetMessages, dbSendEmote } from './core/db.js';
 
 let game;
@@ -71,7 +71,7 @@ document.querySelectorAll('.class-card').forEach(card => {
 });
 
 // ===========================
-// 3. START GAME
+// 3. START GAME (3D)
 // ===========================
 function startGame() {
     document.getElementById('game-container').style.display = 'block';
@@ -83,27 +83,8 @@ function startGame() {
     initHUDButtons();
     initModals();
 
-    // Login particles
-    createLoginParticles();
-
-    const config = {
-        type: Phaser.AUTO,
-        width: window.innerWidth,
-        height: window.innerHeight,
-        parent: 'game-container',
-        physics: {
-            default: 'arcade',
-            arcade: { gravity: { y: 0 }, debug: false }
-        },
-        scene: [GameScene],
-        scale: {
-            mode: Phaser.Scale.RESIZE,
-            autoCenter: Phaser.Scale.CENTER_BOTH
-        }
-    };
-
-    game = new Phaser.Game(config);
-    game.registry.set('user', currentUser);
+    const container = document.getElementById('game-container');
+    game = new Game3D(container, currentUser);
 }
 
 // ===========================
