@@ -38,13 +38,13 @@ function launchGame(user) {
         parent: 'game-container',
         physics: {
             default: 'arcade',
-            arcade: { gravity: { y: 0 }, debug: true } // Debug оставим пока
+            arcade: { gravity: { y: 0 }, debug: false }
         },
-        scene: [ GameScene ]
+        scene: [GameScene]
     };
 
     game = new Phaser.Game(config);
-    
+
     // Передаем данные игрока в сцену через реестр (Registry) - это глобальная память Phaser
     game.registry.set('user', user);
 }

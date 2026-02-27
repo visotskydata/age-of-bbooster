@@ -1,136 +1,127 @@
 import { dbSync } from '../core/db.js';
+import { MapGenerator } from '../map/MapGenerator.js';
 
 export class GameScene extends Phaser.Scene {
     constructor() { super('GameScene'); }
 
     preload() {
-        // ИСПРАВЛЕНИЕ: Используем надежную ссылку с GitHub (raw), а не с labs.phaser.io
-        this.load.spritesheet('hero', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/dude.png', { 
-            frameWidth: 32, frameHeight: 48 
-        });
-        
-        this.load.image('tree', 'https://labs.phaser.io/assets/sprites/tree-european.png');
-        this.load.image('grass', 'https://labs.phaser.io/assets/skies/sky4.png');
-        this.load.image('target', 'https://labs.phaser.io/assets/sprites/apple.png');
+        // Спрайт героя
+        this.load.spritesheet('hero',
+            'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/dude.png',
+            { frameWidth: 32, frameHeight: 48 }
+        );
     }
 
     create() {
         this.currentUser = this.registry.get('user');
-        this.otherPlayers = this.add.group(); 
+        this.otherPlayers = this.add.group();
 
-        // 1. МИР
-        this.physics.world.setBounds(0, 0, 2000, 2000);
-        this.add.tileSprite(1000, 1000, 2000, 2000, 'grass');
+        // 1. ГЕНЕРАЦИЯ КАРТЫ
+        const mapGen = new MapGenerator(this);
+        const { obstacles, worldW, worldH } = mapGen.generate();
 
-        // --- 2. АНИМАЦИИ ---
-        // Проверяем существование, чтобы не создавать дубли
+        // 2. ГРАНИЦЫ МИРА
+        this.physics.world.setBounds(0, 0, worldW, worldH);
+
+        // 3. АНИМАЦИИ ГЕРОЯ
         if (!this.anims.exists('left')) {
-            this.anims.create({
-                key: 'left',
-                frames: this.anims.generateFrameNumbers('hero', { start: 0, end: 3 }),
-                frameRate: 10,
-                repeat: -1
-            });
+            this.anims.create({ key: 'left', frames: this.anims.generateFrameNumbers('hero', { start: 0, end: 3 }), frameRate: 10, repeat: -1 });
         }
-
         if (!this.anims.exists('turn')) {
-            this.anims.create({
-                key: 'turn',
-                frames: [ { key: 'hero', frame: 4 } ],
-                frameRate: 20
-            });
+            this.anims.create({ key: 'turn', frames: [{ key: 'hero', frame: 4 }], frameRate: 20 });
         }
-
         if (!this.anims.exists('right')) {
-            this.anims.create({
-                key: 'right',
-                frames: this.anims.generateFrameNumbers('hero', { start: 5, end: 8 }),
-                frameRate: 10,
-                repeat: -1
-            });
+            this.anims.create({ key: 'right', frames: this.anims.generateFrameNumbers('hero', { start: 5, end: 8 }), frameRate: 10, repeat: -1 });
         }
 
-        // --- 3. ДЕРЕВЬЯ ---
-        this.trees = this.physics.add.staticGroup();
+        // 4. ИГРОК (спавн в центре деревни если координаты дефолтные)
+        const startX = this.currentUser.x || 1500;
+        const startY = this.currentUser.y || 1500;
 
-        const treePositions = [
-            {x: 200, y: 300}, {x: 500, y: 100}, {x: 800, y: 600},
-            {x: 1200, y: 400}, {x: 1500, y: 800}, {x: 300, y: 1000},
-            {x: 1000, y: 1200}, {x: 1800, y: 200}, {x: 600, y: 1500}
-        ];
-
-        treePositions.forEach(pos => {
-            const tree = this.trees.create(pos.x, pos.y, 'tree');
-            tree.setDepth(pos.y);
-            
-            // ВАЖНО: Сначала обновляем тело, чтобы Phaser понял размеры картинки
-            tree.refreshBody();
-
-            // 1. Делаем хитбокс маленьким (только ствол)
-            // Например, 40% от ширины и 20% от высоты картинки
-            const newWidth = tree.width * 0.4;
-            const newHeight = tree.height * 0.2;
-
-            tree.body.setSize(newWidth, newHeight);
-
-            // 2. Сдвигаем хитбокс вниз по центру
-            // Offset X = (ШиринаКартинки - ШиринаХитбокса) / 2
-            // Offset Y = ВысотаКартинки - ВысотаХитбокса
-            tree.body.setOffset(
-                (tree.width - newWidth) / 2, 
-                tree.height - newHeight
-            );
-        });
-
-        // --- 4. НАШ ИГРОК ---
-        const startX = this.currentUser.x || 400;
-        const startY = this.currentUser.y || 300;
-        
         this.player = this.physics.add.sprite(startX, startY, 'hero');
         this.player.setCollideWorldBounds(true);
         this.player.setDepth(startY);
+        this.player.setScale(1.2); // Чуть крупнее
 
-        this.physics.add.collider(this.player, this.trees);
+        // Коллизия с препятствиями
+        this.physics.add.collider(this.player, obstacles);
 
-        this.nameText = this.add.text(startX, startY - 40, this.currentUser.login, {
-            font: '14px Arial', fill: '#ffffff', stroke: '#000000', strokeThickness: 3
+        // Имя игрока
+        this.nameText = this.add.text(startX, startY - 45, this.currentUser.login, {
+            font: '14px Arial', fill: '#ffffff',
+            stroke: '#000000', strokeThickness: 3
         }).setOrigin(0.5);
 
-        // --- 5. КАМЕРА ---
-        this.cameras.main.startFollow(this.player, true, 0.05, 0.05);
+        // 5. КАМЕРА
+        this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+        this.cameras.main.setZoom(1.5); // Приближаем камеру для лучшей детализации
+        this.cameras.main.setBounds(0, 0, worldW, worldH);
 
-        // --- 6. УПРАВЛЕНИЕ ---
-        this.targetMarker = this.add.image(0, 0, 'target').setVisible(false).setAlpha(0.5);
-        this.target = new Phaser.Math.Vector2();
+        // 6. УПРАВЛЕНИЕ (клик → moveTo)
+        this.target = new Phaser.Math.Vector2(startX, startY);
+        this.isMoving = false;
 
-        this.input.on('pointerdown', (pointer) => {
-            const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-            this.moveTo(worldPoint.x, worldPoint.y);
+        // Маркер цели (зеленая пульсирующая точка)
+        const markerGfx = this.make.graphics({ add: false });
+        markerGfx.fillStyle(0x00FF00, 0.8);
+        markerGfx.fillCircle(8, 8, 8);
+        markerGfx.fillStyle(0xFFFFFF, 0.5);
+        markerGfx.fillCircle(8, 8, 4);
+        markerGfx.generateTexture('marker', 16, 16);
+        markerGfx.destroy();
+
+        this.targetMarker = this.add.image(0, 0, 'marker').setVisible(false).setDepth(9999).setAlpha(0.6);
+        this.tweens.add({
+            targets: this.targetMarker,
+            scale: { from: 1, to: 0.5 },
+            alpha: { from: 0.7, to: 0.3 },
+            duration: 600,
+            yoyo: true,
+            repeat: -1
         });
 
-        // СИНХРОНИЗАЦИЯ
+        this.input.on('pointerdown', (pointer) => {
+            const wp = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+            this.moveTo(wp.x, wp.y);
+        });
+
+        // 7. МИНИ-КАРТА (маленькая камера в углу)
+        const miniSize = 160;
+        const miniCam = this.cameras.add(
+            this.scale.width - miniSize - 10, 10,
+            miniSize, miniSize
+        );
+        miniCam.setZoom(miniSize / worldW);
+        miniCam.setScroll(0, 0);
+        miniCam.scrollX = 0;
+        miniCam.scrollY = 0;
+        miniCam.setBounds(0, 0, worldW, worldH);
+        miniCam.setBackgroundColor(0x1a1a1a);
+        // Мини-карта не следит за игроком, показывает всю карту
+        miniCam.centerOn(worldW / 2, worldH / 2);
+
+        // 8. СИНХРОНИЗАЦИЯ
         this.time.addEvent({
-            delay: 500, 
+            delay: 500,
             callback: this.syncNetwork,
             callbackScope: this,
             loop: true
         });
-        
         this.syncNetwork();
     }
 
     moveTo(x, y) {
         this.target.x = x;
         this.target.y = y;
+        this.isMoving = true;
         this.targetMarker.setPosition(x, y).setVisible(true);
         this.physics.moveToObject(this.player, this.target, 200);
-        
-        this.currentUser.x = x;
-        this.currentUser.y = y;
+        this.currentUser.x = Math.round(x);
+        this.currentUser.y = Math.round(y);
     }
 
     async syncNetwork() {
-        if (!this.player) return; // Защита если игрок не создан
+        if (!this.player) return;
         this.currentUser.x = Math.round(this.player.x);
         this.currentUser.y = Math.round(this.player.y);
         const serverPlayers = await dbSync(this.currentUser);
@@ -143,74 +134,67 @@ export class GameScene extends Phaser.Scene {
             if (pData.id === this.currentUser.id) return;
             activeIds.add(pData.id);
 
-            let otherPlayer = this.otherPlayers.getChildren().find(p => p.playerId === pData.id);
+            let op = this.otherPlayers.getChildren().find(p => p.playerId === pData.id);
 
-            if (otherPlayer) {
-                // АНИМАЦИЯ
-                if (otherPlayer.x !== pData.x || otherPlayer.y !== pData.y) {
-                    if (pData.x < otherPlayer.x) otherPlayer.anims.play('left', true);
-                    else if (pData.x > otherPlayer.x) otherPlayer.anims.play('right', true);
+            if (op) {
+                // Анимация
+                if (op.x !== pData.x || op.y !== pData.y) {
+                    if (pData.x < op.x) op.anims.play('left', true);
+                    else if (pData.x > op.x) op.anims.play('right', true);
                 } else {
-                    otherPlayer.anims.play('turn');
+                    op.anims.play('turn');
                 }
-
-                this.tweens.add({
-                    targets: otherPlayer,
-                    x: pData.x, y: pData.y,
-                    duration: 500, 
-                    ease: 'Linear'
-                });
-                otherPlayer.setDepth(pData.y);
-
+                this.tweens.add({ targets: op, x: pData.x, y: pData.y, duration: 500, ease: 'Linear' });
+                op.setDepth(pData.y);
             } else {
-                // СОЗДАНИЕ
-                const newSprite = this.add.sprite(pData.x, pData.y, 'hero');
-                newSprite.setTint(0xff0000); 
-                newSprite.playerId = pData.id; 
-                newSprite.nameText = this.add.text(pData.x, pData.y - 40, pData.login, {
-                    font: '14px Arial', fill: '#ffcccc', stroke: '#000000', strokeThickness: 3
+                // Новый игрок
+                const ns = this.add.sprite(pData.x, pData.y, 'hero');
+                ns.setTint(0xff6666);
+                ns.setScale(1.2);
+                ns.playerId = pData.id;
+                ns.nameText = this.add.text(pData.x, pData.y - 45, pData.login, {
+                    font: '14px Arial', fill: '#ffcccc',
+                    stroke: '#000000', strokeThickness: 3
                 }).setOrigin(0.5);
-                this.otherPlayers.add(newSprite);
+                this.otherPlayers.add(ns);
             }
         });
 
         this.otherPlayers.getChildren().forEach(child => {
             if (!activeIds.has(child.playerId)) {
-                if (child.nameText) child.nameText.destroy(); 
-                child.destroy();          
+                if (child.nameText) child.nameText.destroy();
+                child.destroy();
             }
         });
     }
 
     update() {
-        // ОСТАНОВКА И АНИМАЦИЯ НАШЕГО ИГРОКА
-        const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.target.x, this.target.y);
-        
-        if (this.player.body.speed > 0) {
-            if (this.player.body.velocity.x < 0) {
-                this.player.anims.play('left', true);
-            } else if (this.player.body.velocity.x > 0) {
-                this.player.anims.play('right', true);
-            } else {
-                this.player.anims.play('left', true); 
-            }
+        // Анимация и остановка игрока
+        const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.target.x, this.target.y);
 
-            if (distance < 5) {
+        if (this.player.body.speed > 0) {
+            if (this.player.body.velocity.x < 0) this.player.anims.play('left', true);
+            else if (this.player.body.velocity.x > 0) this.player.anims.play('right', true);
+            else this.player.anims.play('left', true);
+
+            if (dist < 8) {
                 this.player.body.reset(this.target.x, this.target.y);
                 this.targetMarker.setVisible(false);
-                this.player.anims.play('turn'); 
+                this.player.anims.play('turn');
+                this.isMoving = false;
             }
         } else {
-            this.player.anims.play('turn'); 
+            this.player.anims.play('turn');
         }
-        
+
+        // Depth sorting
         this.player.setDepth(this.player.y);
         if (this.nameText) {
-            this.nameText.setPosition(this.player.x, this.player.y - 40).setDepth(this.player.y + 1);
+            this.nameText.setPosition(this.player.x, this.player.y - 45).setDepth(this.player.y + 1);
         }
 
         this.otherPlayers.getChildren().forEach(p => {
-            if (p.nameText) p.nameText.setPosition(p.x, p.y - 40).setDepth(p.y + 1);
+            if (p.nameText) p.nameText.setPosition(p.x, p.y - 45).setDepth(p.y + 1);
         });
     }
 }
