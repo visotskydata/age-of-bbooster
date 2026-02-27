@@ -3,9 +3,12 @@ import { MapGenerator } from '../map/MapGenerator.js';
 import { NpcSystem } from '../systems/NpcSystem.js';
 import { QuestSystem } from '../systems/QuestSystem.js';
 import { InventorySystem } from '../systems/InventorySystem.js';
+import { EnemySystem } from '../systems/EnemySystem.js';
 
 const CLASS_TINTS = { warrior: 0xFFAAAA, mage: 0xAAAAFF, archer: 0xAAFFAA };
 const CLASS_SPEED = { warrior: 180, mage: 200, archer: 240 };
+const CLASS_ATK_CD = { warrior: 450, mage: 900, archer: 700 };
+const CLASS_DMG = { warrior: 18, mage: 22, archer: 14 };
 
 export class GameScene extends Phaser.Scene {
     constructor() { super('GameScene'); }
@@ -13,48 +16,44 @@ export class GameScene extends Phaser.Scene {
     preload() {
         this.load.spritesheet('hero',
             'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/dude.png',
-            { frameWidth: 32, frameHeight: 48 }
-        );
+            { frameWidth: 32, frameHeight: 48 });
     }
 
     create() {
         this.currentUser = this.registry.get('user');
         this.otherPlayers = this.add.group();
+        this.projectiles = this.physics.add.group();
+        this.lastAttackTime = 0;
 
         // 1. MAP
         const mapGen = new MapGenerator(this);
         const { obstacles, worldW, worldH } = mapGen.generate();
         this.physics.world.setBounds(0, 0, worldW, worldH);
 
-        // 2. ANIMATIONS
-        if (!this.anims.exists('left'))
-            this.anims.create({ key: 'left', frames: this.anims.generateFrameNumbers('hero', { start: 0, end: 3 }), frameRate: 10, repeat: -1 });
-        if (!this.anims.exists('turn'))
-            this.anims.create({ key: 'turn', frames: [{ key: 'hero', frame: 4 }], frameRate: 20 });
-        if (!this.anims.exists('right'))
-            this.anims.create({ key: 'right', frames: this.anims.generateFrameNumbers('hero', { start: 5, end: 8 }), frameRate: 10, repeat: -1 });
+        // 2. TOP-DOWN PLAYER TEXTURES
+        this._genPlayerTextures();
+        this._genProjectileTextures();
 
         // 3. PLAYER
+        const cls = this.currentUser.class || 'warrior';
         const startX = this.currentUser.x || 1500;
         const startY = this.currentUser.y || 1500;
-        this.playerSpeed = CLASS_SPEED[this.currentUser.class] || 200;
+        this.playerSpeed = CLASS_SPEED[cls] || 200;
 
-        this.player = this.physics.add.sprite(startX, startY, 'hero');
+        this.player = this.physics.add.sprite(startX, startY, `tex_player_${cls}`);
         this.player.setCollideWorldBounds(true);
         this.player.setDepth(startY);
-        this.player.setScale(1.3);
-        const tint = CLASS_TINTS[this.currentUser.class];
-        if (tint) this.player.setTint(tint);
+        this.player.setScale(1.1);
+        this.player.body.setCircle(13, 3, 3);
         this.physics.add.collider(this.player, obstacles);
 
-        // Name
+        // Name + Level
         const icons = { warrior: '⚔️', mage: '🧙', archer: '🏹' };
-        const icon = icons[this.currentUser.class] || '';
-        this.nameText = this.add.text(startX, startY - 50, `${icon} ${this.currentUser.login}`, {
-            font: '12px Inter, Arial', fill: '#ffffff', stroke: '#000000', strokeThickness: 3
+        this.nameText = this.add.text(startX, startY - 28, `${icons[cls] || ''} ${this.currentUser.login}`, {
+            font: '11px Inter, Arial', fill: '#fff', stroke: '#000', strokeThickness: 3
         }).setOrigin(0.5);
-        this.levelBadge = this.add.text(startX, startY - 50, `Lv.${this.currentUser.level || 1}`, {
-            font: '9px Inter', fill: '#FFD700', stroke: '#000000', strokeThickness: 2
+        this.levelBadge = this.add.text(startX, startY - 28, `Lv.${this.currentUser.level || 1}`, {
+            font: '9px Inter', fill: '#FFD700', stroke: '#000', strokeThickness: 2
         }).setOrigin(0.5);
         this.hpBarBg = this.add.graphics();
         this.hpBarFill = this.add.graphics();
@@ -64,27 +63,22 @@ export class GameScene extends Phaser.Scene {
         this.cameras.main.setZoom(1.5);
         this.cameras.main.setBounds(0, 0, worldW, worldH);
 
-        // 5. CONTROLS
-        this.target = new Phaser.Math.Vector2(startX, startY);
-        this.isMoving = false;
+        // 5. KEYBOARD (WASD + E for interact)
+        this.keys = this.input.keyboard.addKeys({
+            w: 'W', s: 'S', a: 'A', d: 'D', e: 'E',
+            up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT'
+        });
+        // E to interact
+        this.input.keyboard.on('keydown-E', () => this._interact());
 
-        const mg = this.make.graphics({ add: false });
-        mg.fillStyle(0x00FF00, 0.8); mg.fillCircle(8, 8, 8);
-        mg.fillStyle(0xFFFFFF, 0.5); mg.fillCircle(8, 8, 4);
-        mg.generateTexture('marker', 16, 16); mg.destroy();
-
-        this.targetMarker = this.add.image(0, 0, 'marker').setVisible(false).setDepth(9999).setAlpha(0.6);
-        this.tweens.add({ targets: this.targetMarker, scale: { from: 1, to: 0.5 }, alpha: { from: 0.7, to: 0.3 }, duration: 600, yoyo: true, repeat: -1 });
-
+        // 6. MOUSE — attack on click
         this.input.on('pointerdown', (pointer) => {
-            const wp = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-            const clicked = this.getClickedPlayer(wp.x, wp.y);
-            if (clicked) { this.showPlayerInteraction(clicked); return; }
-            document.getElementById('player-interact')?.classList.add('hidden');
-            this.moveTo(wp.x, wp.y);
+            if (pointer.leftButtonDown()) {
+                this._attack(pointer);
+            }
         });
 
-        // 6. MINIMAP
+        // 7. MINIMAP
         const ms = 150;
         const miniCam = this.cameras.add(this.scale.width - ms - 12, 12, ms, ms);
         miniCam.setZoom(ms / worldW);
@@ -92,58 +86,221 @@ export class GameScene extends Phaser.Scene {
         miniCam.setBackgroundColor(0x0a0a1a);
         miniCam.centerOn(worldW / 2, worldH / 2);
 
-        // 7. NPC SYSTEM
+        // 8. NPC SYSTEM
         this.npcSystem = new NpcSystem(this);
         this.npcSystem.create();
 
-        // 8. QUEST SYSTEM
+        // 9. QUEST SYSTEM
         this.questSystem = new QuestSystem(this);
         this.questSystem.updateQuestUI();
 
-        // 9. INVENTORY SYSTEM + LOOT
+        // 10. INVENTORY + LOOT
         this.inventorySystem = new InventorySystem(this);
         this.inventorySystem.spawnLoot();
         this.inventorySystem.updateUI();
 
-        // 10. DAY/NIGHT CYCLE
-        this.dayNight = this.add.graphics();
-        this.dayNight.setDepth(9998);
-        this.dayNight.setScrollFactor(0);
+        // 11. ENEMY SYSTEM
+        this.enemySystem = new EnemySystem(this);
+        this.enemySystem.create();
+
+        // Projectile-enemy overlap
+        this.physics.add.overlap(this.projectiles, this.enemySystem.enemies, (proj, enemy) => {
+            if (!enemy.alive) return;
+            this.enemySystem.damage(enemy, proj.dmg || 10);
+            // Hit effect
+            if (this.textures.exists('tex_sparkle')) {
+                const p = this.add.particles(proj.x, proj.y, 'tex_sparkle', {
+                    speed: { min: 20, max: 60 }, lifespan: 300, quantity: 5,
+                    scale: { start: 1, end: 0 }, emitting: false
+                });
+                p.explode(5); this.time.delayedCall(400, () => p.destroy());
+            }
+            proj.destroy();
+        });
+
+        // 12. DAY/NIGHT
+        this.dayNight = this.add.graphics().setDepth(9998).setScrollFactor(0);
         this.dayTime = 0;
 
-        // 11. ZONE TRACKING (for explore quests)
+        // 13. ZONE TRACKING
         this.currentZone = 'village';
         this.visitedZones = new Set(['village']);
 
-        // 12. SYNC
+        // 14. SYNC
         this.time.addEvent({ delay: 500, callback: this.syncNetwork, callbackScope: this, loop: true });
         this.syncNetwork();
+
+        // 15. Crosshair cursor
+        this.input.setDefaultCursor('crosshair');
     }
 
-    moveTo(x, y) {
-        this.target.set(x, y);
-        this.isMoving = true;
-        this.targetMarker.setPosition(x, y).setVisible(true);
-        this.physics.moveToObject(this.player, this.target, this.playerSpeed);
-        this.currentUser.x = Math.round(x);
-        this.currentUser.y = Math.round(y);
+    /* ===========================
+       PLAYER TEXTURE GENERATION (top-down view)
+    =========================== */
+    _genPlayerTextures() {
+        const classes = [
+            { id: 'warrior', body: 0xFF6B6B, accent: 0xFF9999, weapon: 0xBDBDBD },
+            { id: 'mage', body: 0x5C6BC0, accent: 0x7986CB, weapon: 0xE040FB },
+            { id: 'archer', body: 0x66BB6A, accent: 0x81C784, weapon: 0x8D6E63 },
+        ];
+
+        classes.forEach(c => {
+            const g = this.make.graphics({ add: false });
+            // Shadow
+            g.fillStyle(0x000000, 0.2); g.fillEllipse(16, 28, 22, 8);
+            // Body circle
+            g.fillStyle(c.body); g.fillCircle(16, 16, 13);
+            // Inner face
+            g.fillStyle(c.accent, 0.6); g.fillCircle(16, 13, 7);
+            // Eyes
+            g.fillStyle(0x000000); g.fillCircle(13, 13, 1.5); g.fillCircle(19, 13, 1.5);
+            // Direction pointer (top)
+            g.fillStyle(c.weapon, 0.9); g.fillTriangle(16, 0, 12, 7, 20, 7);
+            g.generateTexture(`tex_player_${c.id}`, 32, 32);
+            g.destroy();
+        });
+
+        // Other player (generic golden)
+        const g = this.make.graphics({ add: false });
+        g.fillStyle(0x000000, 0.2); g.fillEllipse(16, 28, 22, 8);
+        g.fillStyle(0xFFB74D); g.fillCircle(16, 16, 13);
+        g.fillStyle(0xFFCC80, 0.6); g.fillCircle(16, 13, 7);
+        g.fillStyle(0x000000); g.fillCircle(13, 13, 1.5); g.fillCircle(19, 13, 1.5);
+        g.fillStyle(0xFFD700, 0.9); g.fillTriangle(16, 0, 12, 7, 20, 7);
+        g.generateTexture('tex_player_other', 32, 32);
+        g.destroy();
     }
 
-    // ===========================
-    // SPEECH BUBBLE
-    // ===========================
+    _genProjectileTextures() {
+        let g;
+        // ARROW
+        g = this.make.graphics({ add: false });
+        g.fillStyle(0x795548); g.fillRect(0, 2, 14, 2);
+        g.fillStyle(0xBDBDBD); g.fillTriangle(18, 3, 14, 0, 14, 6);
+        g.fillStyle(0x5D4037); g.fillTriangle(0, 0, 4, 3, 0, 6);
+        g.generateTexture('tex_arrow', 18, 6);
+        g.destroy();
+
+        // MAGIC BOLT
+        g = this.make.graphics({ add: false });
+        g.fillStyle(0x7C4DFF, 0.5); g.fillCircle(6, 6, 6);
+        g.fillStyle(0xE040FB, 0.8); g.fillCircle(6, 6, 4);
+        g.fillStyle(0xFFFFFF, 0.7); g.fillCircle(6, 6, 2);
+        g.generateTexture('tex_magicbolt', 12, 12);
+        g.destroy();
+
+        // SWORD SLASH
+        g = this.make.graphics({ add: false });
+        g.lineStyle(5, 0xFFFFFF, 0.9);
+        g.beginPath(); g.arc(16, 16, 14, -0.8, 0.8, false); g.strokePath();
+        g.lineStyle(3, 0xFF6B6B, 0.6);
+        g.beginPath(); g.arc(16, 16, 10, -0.6, 0.6, false); g.strokePath();
+        g.generateTexture('tex_slash', 32, 32);
+        g.destroy();
+    }
+
+    /* ===========================
+       ATTACK
+    =========================== */
+    _attack(pointer) {
+        const now = this.time.now;
+        const cls = this.currentUser.class || 'warrior';
+        const cd = CLASS_ATK_CD[cls] || 600;
+        if (now - this.lastAttackTime < cd) return;
+        this.lastAttackTime = now;
+
+        const wp = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        const angle = Phaser.Math.Angle.Between(this.player.x, this.player.y, wp.x, wp.y);
+        const baseDmg = (this.currentUser.attack || 10) + (CLASS_DMG[cls] || 10);
+
+        if (cls === 'warrior') this._meleeAttack(angle, baseDmg);
+        else if (cls === 'archer') this._rangedAttack(angle, baseDmg, 'tex_arrow', 380, 1500);
+        else if (cls === 'mage') this._rangedAttack(angle, baseDmg, 'tex_magicbolt', 280, 2000);
+
+        this.cameras.main.shake(40, 0.002);
+    }
+
+    _meleeAttack(angle, dmg) {
+        const dist = 30;
+        const sx = this.player.x + Math.cos(angle) * dist;
+        const sy = this.player.y + Math.sin(angle) * dist;
+
+        const slash = this.add.image(sx, sy, 'tex_slash');
+        slash.setRotation(angle);
+        slash.setDepth(10000);
+        slash.setAlpha(0.9);
+        this.tweens.add({
+            targets: slash, alpha: 0, scale: 1.5, duration: 250,
+            onComplete: () => slash.destroy()
+        });
+
+        // Check enemies in melee range
+        this.enemySystem.enemies.getChildren().forEach(e => {
+            if (!e.alive) return;
+            const d = Phaser.Math.Distance.Between(sx, sy, e.x, e.y);
+            if (d < 40) this.enemySystem.damage(e, dmg);
+        });
+    }
+
+    _rangedAttack(angle, dmg, tex, speed, lifespan) {
+        const ox = this.player.x + Math.cos(angle) * 20;
+        const oy = this.player.y + Math.sin(angle) * 20;
+
+        const proj = this.physics.add.sprite(ox, oy, tex);
+        proj.setRotation(angle);
+        proj.setDepth(9000);
+        proj.setScale(1.2);
+        proj.dmg = dmg;
+        proj.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+        this.projectiles.add(proj);
+
+        // Trail effect
+        if (tex === 'tex_magicbolt') {
+            const trail = this.add.particles(ox, oy, 'tex_sparkle', {
+                speed: 5, lifespan: 300, quantity: 1, frequency: 40,
+                scale: { start: 0.8, end: 0 }, alpha: { start: 0.6, end: 0 },
+                follow: proj
+            });
+            this.time.delayedCall(lifespan, () => trail.destroy());
+        }
+
+        this.time.delayedCall(lifespan, () => { if (proj.active) proj.destroy(); });
+    }
+
+    /* ===========================
+       INTERACT (E key)
+    =========================== */
+    _interact() {
+        const px = this.player.x, py = this.player.y;
+        // NPC check
+        if (this.npcSystem) {
+            const { NPC_DATA } = this.npcSystem.constructor.prototype.constructor.length ? {} : {};
+            // Just trigger nearest NPC
+            Object.values(this.npcSystem.npcs).forEach(npc => {
+                const d = Phaser.Math.Distance.Between(px, py, npc.data.x, npc.data.y);
+                if (d < 80) this.npcSystem.openDialog(npc.data.id, 'start');
+            });
+        }
+        // Loot check
+        if (this.inventorySystem) {
+            this.inventorySystem.lootSprites.forEach(loot => {
+                if (!loot.active) return;
+                const d = Phaser.Math.Distance.Between(px, py, loot.x, loot.y);
+                if (d < 60) this.inventorySystem.pickupLoot(loot);
+            });
+        }
+    }
+
+    /* ===========================
+       SPEECH / EMOTES
+    =========================== */
     showSpeechBubble(text) {
         if (this.myBubble) this.myBubble.destroy();
         if (this.myBubbleText) this.myBubbleText.destroy();
-
         const bw = Math.min(text.length * 7 + 20, 200);
         const bg = this.add.graphics();
-        bg.fillStyle(0xFFFFFF, 0.9).fillRoundedRect(-bw / 2, -20, bw, 24, 8);
-        bg.setDepth(10001);
-        const txt = this.add.text(0, -8, text, {
-            font: '10px Inter', fill: '#000', wordWrap: { width: 180 }
-        }).setOrigin(0.5).setDepth(10002);
-
+        bg.fillStyle(0xFFFFFF, 0.9).fillRoundedRect(-bw / 2, -20, bw, 24, 8).setDepth(10001);
+        const txt = this.add.text(0, -8, text, { font: '10px Inter', fill: '#000', wordWrap: { width: 180 } }).setOrigin(0.5).setDepth(10002);
         this.myBubble = bg; this.myBubbleText = txt;
         this.time.delayedCall(4000, () => {
             if (this.myBubble) { this.myBubble.destroy(); this.myBubble = null; }
@@ -151,43 +308,21 @@ export class GameScene extends Phaser.Scene {
         });
     }
 
-    // ===========================
-    // EMOTE
-    // ===========================
     showEmote(emoteText) {
         if (this.myEmote) this.myEmote.destroy();
-        this.myEmote = this.add.text(this.player.x, this.player.y - 70, emoteText, { font: '32px Arial' })
+        this.myEmote = this.add.text(this.player.x, this.player.y - 50, emoteText, { font: '32px Arial' })
             .setOrigin(0.5).setDepth(10003);
         this.tweens.add({
-            targets: this.myEmote, y: this.player.y - 110,
-            alpha: { from: 1, to: 0 }, scale: { from: 1, to: 1.5 },
-            duration: 2000,
+            targets: this.myEmote, y: this.player.y - 90,
+            alpha: { from: 1, to: 0 }, scale: { from: 1, to: 1.5 }, duration: 2000,
             onComplete: () => { if (this.myEmote) { this.myEmote.destroy(); this.myEmote = null; } }
         });
         this.time.delayedCall(2500, () => { this.currentUser.emote = null; this.currentUser.emote_at = 0; });
     }
 
-    // ===========================
-    // PLAYER INTERACTION
-    // ===========================
-    getClickedPlayer(wx, wy) {
-        for (const p of this.otherPlayers.getChildren()) {
-            if (Phaser.Math.Distance.Between(wx, wy, p.x, p.y) < 30) return p;
-        }
-        return null;
-    }
-
-    showPlayerInteraction(sprite) {
-        const panel = document.getElementById('player-interact');
-        if (!panel) return;
-        document.getElementById('interact-name').textContent = sprite.playerLogin || 'Player';
-        panel.classList.remove('hidden');
-        this.selectedPlayer = sprite;
-    }
-
-    // ===========================
-    // ZONE DETECTION
-    // ===========================
+    /* ===========================
+       ZONE
+    =========================== */
     detectZone(x, y) {
         if (x < 1000 && y < 1000) return 'forest';
         if (x > 2000 && y < 1000) return 'mountains';
@@ -196,53 +331,51 @@ export class GameScene extends Phaser.Scene {
         return 'village';
     }
 
-    // ===========================
-    // NETWORK
-    // ===========================
+    /* ===========================
+       NETWORK
+    =========================== */
     async syncNetwork() {
         if (!this.player) return;
         this.currentUser.x = Math.round(this.player.x);
         this.currentUser.y = Math.round(this.player.y);
-        const serverPlayers = await dbSync(this.currentUser);
-        this.updateOtherPlayers(serverPlayers);
+        const players = await dbSync(this.currentUser);
+        this._updateOthers(players);
         if (window.updateHUD) window.updateHUD();
     }
 
-    updateOtherPlayers(serverPlayers) {
+    _updateOthers(serverPlayers) {
         const activeIds = new Set();
-        serverPlayers.forEach(pData => {
-            if (pData.id === this.currentUser.id) return;
-            activeIds.add(pData.id);
-            let op = this.otherPlayers.getChildren().find(p => p.playerId === pData.id);
+        serverPlayers.forEach(p => {
+            if (p.id === this.currentUser.id) return;
+            activeIds.add(p.id);
+            let op = this.otherPlayers.getChildren().find(c => c.playerId === p.id);
             if (op) {
-                if (op.x !== pData.x || op.y !== pData.y) {
-                    if (pData.x < op.x) op.anims.play('left', true);
-                    else op.anims.play('right', true);
-                } else op.anims.play('turn');
-                this.tweens.add({ targets: op, x: pData.x, y: pData.y, duration: 500, ease: 'Linear' });
-                op.setDepth(pData.y);
-
-                // Other player emotes
-                if (pData.emote && pData.emote_at && Date.now() - pData.emote_at < 3000) {
-                    if (!op._emoteShown) {
-                        op._emoteShown = true;
-                        const emo = this.add.text(pData.x, pData.y - 70, pData.emote, { font: '28px Arial' })
-                            .setOrigin(0.5).setDepth(pData.y + 100);
-                        this.tweens.add({
-                            targets: emo, y: pData.y - 100, alpha: { from: 1, to: 0 }, duration: 2500,
-                            onComplete: () => { emo.destroy(); op._emoteShown = false; }
-                        });
-                    }
+                this.tweens.add({ targets: op, x: p.x, y: p.y, duration: 500, ease: 'Linear' });
+                op.setDepth(p.y);
+                // Estimate rotation from movement
+                if (op.x !== p.x || op.y !== p.y) {
+                    const a = Phaser.Math.Angle.Between(op.x, op.y, p.x, p.y);
+                    op.setRotation(a + Math.PI / 2);
+                }
+                // Emotes
+                if (p.emote && p.emote_at && Date.now() - p.emote_at < 3000 && !op._emoShown) {
+                    op._emoShown = true;
+                    const emo = this.add.text(p.x, p.y - 50, p.emote, { font: '28px Arial' }).setOrigin(0.5).setDepth(p.y + 100);
+                    this.tweens.add({
+                        targets: emo, y: p.y - 80, alpha: 0, duration: 2500,
+                        onComplete: () => { emo.destroy(); op._emoShown = false; }
+                    });
                 }
             } else {
-                const ns = this.add.sprite(pData.x, pData.y, 'hero').setScale(1.3);
-                const t = CLASS_TINTS[pData.class]; if (t) ns.setTint(t);
-                ns.playerId = pData.id; ns.playerLogin = pData.login; ns.playerClass = pData.class;
-                const oi = { warrior: '⚔️', mage: '🧙', archer: '🏹' }[pData.class] || '';
-                ns.nameText = this.add.text(pData.x, pData.y - 50, `${oi} ${pData.login}`, {
-                    font: '12px Inter, Arial', fill: '#FFD700', stroke: '#000', strokeThickness: 3
+                const tex = `tex_player_${p.class || 'warrior'}`;
+                const t = this.textures.exists(tex) ? tex : 'tex_player_other';
+                const ns = this.add.sprite(p.x, p.y, t).setScale(1.1);
+                ns.playerId = p.id; ns.playerLogin = p.login;
+                const oi = { warrior: '⚔️', mage: '🧙', archer: '🏹' }[p.class] || '';
+                ns.nameText = this.add.text(p.x, p.y - 28, `${oi} ${p.login}`, {
+                    font: '11px Inter, Arial', fill: '#FFD700', stroke: '#000', strokeThickness: 3
                 }).setOrigin(0.5);
-                ns.lvlText = this.add.text(pData.x, pData.y - 50, `Lv.${pData.level || 1}`, {
+                ns.lvlText = this.add.text(p.x, p.y - 28, `Lv.${p.level || 1}`, {
                     font: '9px Inter', fill: '#FFD700', stroke: '#000', strokeThickness: 2
                 }).setOrigin(0.5);
                 ns.setInteractive({ useHandCursor: true });
@@ -258,54 +391,69 @@ export class GameScene extends Phaser.Scene {
         });
     }
 
-    // ===========================
-    // UPDATE
-    // ===========================
-    update(time) {
+    /* ===========================
+       UPDATE LOOP
+    =========================== */
+    update(time, delta) {
         const px = this.player.x, py = this.player.y;
-        const dist = Phaser.Math.Distance.Between(px, py, this.target.x, this.target.y);
 
-        if (this.player.body.speed > 0) {
-            if (this.player.body.velocity.x < 0) this.player.anims.play('left', true);
-            else if (this.player.body.velocity.x > 0) this.player.anims.play('right', true);
-            else this.player.anims.play('left', true);
-            if (dist < 8) {
-                this.player.body.reset(this.target.x, this.target.y);
-                this.targetMarker.setVisible(false);
-                this.player.anims.play('turn');
-                this.isMoving = false;
-            }
+        // --- WASD MOVEMENT ---
+        let vx = 0, vy = 0;
+        if (this.keys.a.isDown || this.keys.left.isDown) vx -= 1;
+        if (this.keys.d.isDown || this.keys.right.isDown) vx += 1;
+        if (this.keys.w.isDown || this.keys.up.isDown) vy -= 1;
+        if (this.keys.s.isDown || this.keys.down.isDown) vy += 1;
+
+        if (vx !== 0 && vy !== 0) { vx *= 0.707; vy *= 0.707; }
+        this.player.setVelocity(vx * this.playerSpeed, vy * this.playerSpeed);
+
+        // Walking bobble
+        if (vx !== 0 || vy !== 0) {
+            this.player.setScale(1.1 + Math.sin(time * 0.012) * 0.04);
         } else {
-            this.player.anims.play('turn');
-            // Check pending interactions when stopped
-            if (this.npcSystem) this.npcSystem.checkPendingInteraction(px, py);
-            if (this.inventorySystem) this.inventorySystem.checkPendingLoot(px, py);
+            this.player.setScale(1.1);
         }
 
-        // Depth + labels
+        // --- MOUSE ROTATION ---
+        const pointer = this.input.activePointer;
+        const wp = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        const angle = Phaser.Math.Angle.Between(px, py, wp.x, wp.y);
+        // Smooth rotation
+        const targetRot = angle + Math.PI / 2;
+        this.player.rotation = Phaser.Math.Angle.RotateTo(this.player.rotation, targetRot, 0.15);
+
+        // --- DEPTH ---
         this.player.setDepth(py);
-        if (this.nameText) this.nameText.setPosition(px, py - 50).setDepth(py + 1);
+        if (this.nameText) this.nameText.setPosition(px, py - 28).setDepth(py + 1);
         if (this.levelBadge) {
             const nw = this.nameText ? this.nameText.width / 2 + 16 : 40;
-            this.levelBadge.setPosition(px + nw, py - 50).setDepth(py + 1);
+            this.levelBadge.setPosition(px + nw, py - 28).setDepth(py + 1);
         }
-        this.drawHPBar(px, py - 38);
-        if (this.myBubble) this.myBubble.setPosition(px, py - 75);
-        if (this.myBubbleText) this.myBubbleText.setPosition(px, py - 83);
+        this._drawHPBar(px, py - 20);
 
-        // Other players
+        // Bubble
+        if (this.myBubble) this.myBubble.setPosition(px, py - 55);
+        if (this.myBubbleText) this.myBubbleText.setPosition(px, py - 63);
+
+        // --- OTHER PLAYERS ---
         this.otherPlayers.getChildren().forEach(p => {
-            if (p.nameText) p.nameText.setPosition(p.x, p.y - 50).setDepth(p.y + 1);
+            if (p.nameText) p.nameText.setPosition(p.x, p.y - 28).setDepth(p.y + 1);
             if (p.lvlText) {
                 const nw = p.nameText ? p.nameText.width / 2 + 16 : 40;
-                p.lvlText.setPosition(p.x + nw, p.y - 50).setDepth(p.y + 1);
+                p.lvlText.setPosition(p.x + nw, p.y - 28).setDepth(p.y + 1);
             }
         });
 
-        // NPC proximity
+        // --- NPC ---
         if (this.npcSystem) this.npcSystem.update(px, py);
 
-        // Zone tracking
+        // --- ENEMIES ---
+        if (this.enemySystem) this.enemySystem.update(time, delta, px, py);
+
+        // --- INVENTORY pending loot ---
+        if (this.inventorySystem) this.inventorySystem.checkPendingLoot(px, py);
+
+        // --- ZONE TRACKING ---
         const zone = this.detectZone(px, py);
         if (zone !== this.currentZone) {
             this.currentZone = zone;
@@ -315,24 +463,21 @@ export class GameScene extends Phaser.Scene {
             }
         }
 
-        // Day/night cycle (subtle)
+        // --- DAY/NIGHT ---
         this.dayTime = (this.dayTime + 0.0002) % 1;
-        const nightAlpha = Math.sin(this.dayTime * Math.PI * 2) * 0.15;
+        const nightAlpha = Math.sin(this.dayTime * Math.PI * 2) * 0.12;
+        this.dayNight.clear();
         if (nightAlpha > 0) {
-            this.dayNight.clear();
             this.dayNight.fillStyle(0x000033, nightAlpha);
             this.dayNight.fillRect(0, 0, this.scale.width, this.scale.height);
-        } else {
-            this.dayNight.clear();
         }
     }
 
-    drawHPBar(x, y) {
-        const hp = this.currentUser.hp || 100;
-        const maxHp = this.currentUser.max_hp || 100;
-        const w = 40, h = 4, pct = hp / maxHp;
+    _drawHPBar(x, y) {
+        const hp = this.currentUser.hp || 100, maxHp = this.currentUser.max_hp || 100;
+        const w = 36, h = 4, pct = hp / maxHp;
         this.hpBarBg.clear().fillStyle(0x000000, 0.5).fillRoundedRect(x - w / 2, y, w, h, 2).setDepth(this.player.y + 2);
-        const color = pct > 0.5 ? 0x4CAF50 : pct > 0.25 ? 0xFFC107 : 0xFF4B4B;
-        this.hpBarFill.clear().fillStyle(color, 0.9).fillRoundedRect(x - w / 2, y, w * pct, h, 2).setDepth(this.player.y + 3);
+        const c = pct > 0.5 ? 0x4CAF50 : pct > 0.25 ? 0xFFC107 : 0xFF4B4B;
+        this.hpBarFill.clear().fillStyle(c, 0.9).fillRoundedRect(x - w / 2, y, w * pct, h, 2).setDepth(this.player.y + 3);
     }
 }
