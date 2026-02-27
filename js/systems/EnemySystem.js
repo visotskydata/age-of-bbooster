@@ -74,7 +74,7 @@ export class EnemySystem {
     }
 
     _spawnAll() {
-        const rnd = this.scene.rnd;
+        
         const defs = [
             { type: 'slime', tex: 'tex_slime', zone: { minX: 120, maxX: 830, minY: 120, maxY: 830 }, count: 10, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
             { type: 'skeleton', tex: 'tex_skeleton', zone: { minX: 2120, maxX: 2830, minY: 140, maxY: 730 }, count: 8, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
@@ -102,12 +102,12 @@ export class EnemySystem {
     }
 
     _spawn(def) {
-        const rnd = this.scene.rnd;
+        
         let x = def.x;
         let y = def.y;
         if (x === undefined) {
-            x = rnd.between(def.zone.minX, def.zone.maxX);
-            y = rnd.between(def.zone.minY, def.zone.maxY);
+            x = Phaser.Math.Between(def.zone.minX, def.zone.maxX);
+            y = Phaser.Math.Between(def.zone.minY, def.zone.maxY);
             if (def.type === 'darkmage' && Math.hypot(x - 2500, y - 2500) < 250) return; // keep out of lake center
         }
 
@@ -119,7 +119,7 @@ export class EnemySystem {
             mobId: def.id, enemyType: def.type,
             maxHp: def.hp, hp: def.hp, atkPow: def.atk, moveSpd: def.spd, xpVal: def.xp, detectRange: def.range,
             alive: true, def, wanderTimer: 0,
-            wanderAngle: rnd.frac() * Math.PI * 2, lastAtk: 0, isBoss: def.isBoss
+            wanderAngle: Math.random() * Math.PI * 2, lastAtk: 0, isBoss: def.isBoss
         });
 
         e.hpBg = this.scene.add.graphics();

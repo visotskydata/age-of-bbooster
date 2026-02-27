@@ -14,9 +14,6 @@ export class GameScene extends Phaser.Scene {
     constructor() { super('GameScene'); }
 
     create() {
-        // Init deterministic random for synced maps and mob spawns
-        this.rnd.init(['age-of-bbooster-seed-1']);
-
         this.currentUser = this.registry.get('user');
         this.otherPlayers = this.add.group();
         this.projectiles = this.physics.add.group();
