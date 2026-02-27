@@ -1,125 +1,137 @@
 // js/systems/EnemySystem.js
-// Enemy spawning, AI, combat, death, respawn, Bosses, and Multiplayer Sync
+// Enemy spawning with FIXED positions for multiplayer sync, AI, combat, bosses
 
 import { broadcastMobHit } from '../core/db.js';
+
+// ========================================
+// FIXED MOB POSITIONS — same for all players!
+// ========================================
+const MOB_DEFS = [
+    // FOREST — Slimes
+    { id: 'slime_0', type: 'slime', x: 200, y: 200, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+    { id: 'slime_1', type: 'slime', x: 400, y: 180, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+    { id: 'slime_2', type: 'slime', x: 600, y: 350, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+    { id: 'slime_3', type: 'slime', x: 250, y: 500, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+    { id: 'slime_4', type: 'slime', x: 450, y: 650, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+    { id: 'slime_5', type: 'slime', x: 700, y: 500, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+    { id: 'slime_6', type: 'slime', x: 350, y: 800, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+    { id: 'slime_7', type: 'slime', x: 150, y: 700, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+    { id: 'slime_8', type: 'slime', x: 550, y: 150, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+    { id: 'slime_9', type: 'slime', x: 780, y: 300, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
+
+    // MOUNTAINS — Skeletons
+    { id: 'skel_0', type: 'skeleton', x: 2200, y: 200, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
+    { id: 'skel_1', type: 'skeleton', x: 2400, y: 350, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
+    { id: 'skel_2', type: 'skeleton', x: 2600, y: 200, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
+    { id: 'skel_3', type: 'skeleton', x: 2300, y: 500, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
+    { id: 'skel_4', type: 'skeleton', x: 2500, y: 600, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
+    { id: 'skel_5', type: 'skeleton', x: 2700, y: 400, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
+    { id: 'skel_6', type: 'skeleton', x: 2800, y: 250, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
+    { id: 'skel_7', type: 'skeleton', x: 2150, y: 650, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
+
+    // MEADOW — Wolves
+    { id: 'wolf_0', type: 'wolf', x: 200, y: 2200, hp: 35, atk: 12, spd: 95, xp: 20, range: 300 },
+    { id: 'wolf_1', type: 'wolf', x: 400, y: 2350, hp: 35, atk: 12, spd: 95, xp: 20, range: 300 },
+    { id: 'wolf_2', type: 'wolf', x: 600, y: 2500, hp: 35, atk: 12, spd: 95, xp: 20, range: 300 },
+    { id: 'wolf_3', type: 'wolf', x: 300, y: 2600, hp: 35, atk: 12, spd: 95, xp: 20, range: 300 },
+    { id: 'wolf_4', type: 'wolf', x: 500, y: 2750, hp: 35, atk: 12, spd: 95, xp: 20, range: 300 },
+    { id: 'wolf_5', type: 'wolf', x: 700, y: 2400, hp: 35, atk: 12, spd: 95, xp: 20, range: 300 },
+    { id: 'wolf_6', type: 'wolf', x: 150, y: 2500, hp: 35, atk: 12, spd: 95, xp: 20, range: 300 },
+    { id: 'wolf_7', type: 'wolf', x: 750, y: 2650, hp: 35, atk: 12, spd: 95, xp: 20, range: 300 },
+
+    // LAKE — Dark Mages
+    { id: 'dmage_0', type: 'darkmage', x: 2150, y: 2150, hp: 70, atk: 15, spd: 50, xp: 35, range: 280 },
+    { id: 'dmage_1', type: 'darkmage', x: 2350, y: 2200, hp: 70, atk: 15, spd: 50, xp: 35, range: 280 },
+    { id: 'dmage_2', type: 'darkmage', x: 2700, y: 2300, hp: 70, atk: 15, spd: 50, xp: 35, range: 280 },
+    { id: 'dmage_3', type: 'darkmage', x: 2200, y: 2650, hp: 70, atk: 15, spd: 50, xp: 35, range: 280 },
+    { id: 'dmage_4', type: 'darkmage', x: 2650, y: 2700, hp: 70, atk: 15, spd: 50, xp: 35, range: 280 },
+];
+
+// BOSSES
+const BOSS_DEFS = [
+    { id: 'boss_dragon', type: 'dragon', x: 2500, y: 400, hp: 1000, atk: 30, spd: 80, xp: 500, range: 400, isBoss: true },
+    { id: 'boss_kraken', type: 'kraken', x: 2500, y: 2500, hp: 800, atk: 25, spd: 40, xp: 400, range: 350, isBoss: true },
+];
+
+// Sprite frame map (which frame in the spritesheet is which enemy)
+const ENEMY_FRAMES = {
+    slime: { tex: 'enemies', frame: 0 },
+    skeleton: { tex: 'enemies', frame: 1 },
+    wolf: { tex: 'enemies', frame: 2 },
+    darkmage: { tex: 'enemies', frame: 3 },
+    dragon: { tex: 'bosses', frame: 0 },
+    kraken: { tex: 'bosses', frame: 1 },
+};
 
 export class EnemySystem {
     constructor(scene) {
         this.scene = scene;
         this.enemies = scene.physics.add.group();
         this.respawnQueue = [];
-        this.networkHits = [];
     }
 
     create() {
-        this._genTextures();
-        this._spawnAll();
+        this._genFallbackTextures();
+        // Spawn all mobs at fixed positions
+        MOB_DEFS.forEach(def => this._spawn(def));
+        BOSS_DEFS.forEach(def => this._spawn(def));
     }
 
-    _genTextures() {
+    _genFallbackTextures() {
         const s = this.scene;
-        let g;
-
-        // Create glowing neon textures
-        const makeNeon = (key, color, shapeFn, w, h) => {
-            g = s.make.graphics({ add: false });
-            // core glow
-            g.lineStyle(6, color, 0.3); shapeFn(g);
-            g.lineStyle(3, color, 0.8); shapeFn(g);
-            g.lineStyle(1, 0xFFFFFF, 1.0); shapeFn(g);
-            g.generateTexture(key, w, h);
-            g.destroy();
-        };
-
-        makeNeon('tex_slime', 0x00FF00, (g) => {
-            g.beginPath(); g.arc(16, 16, 12, 0, Math.PI * 2); g.strokePath();
-        }, 32, 32);
-
-        makeNeon('tex_skeleton', 0xEEEEEE, (g) => {
-            g.strokeRect(8, 8, 16, 16);
-            g.beginPath(); g.moveTo(8, 8); g.lineTo(24, 24); g.strokePath();
-        }, 32, 32);
-
-        makeNeon('tex_wolf', 0xFF5252, (g) => {
-            g.beginPath(); g.moveTo(16, 4); g.lineTo(28, 28); g.lineTo(4, 28); g.closePath(); g.strokePath();
-        }, 32, 32);
-
-        makeNeon('tex_darkmage', 0xAA00FF, (g) => {
-            g.beginPath(); g.moveTo(16, 4); g.lineTo(24, 16); g.lineTo(16, 28); g.lineTo(8, 16); g.closePath(); g.strokePath();
-        }, 32, 32);
-
-        // DRAGON BOSS
-        makeNeon('tex_dragon', 0xFF0000, (g) => {
-            g.strokeRect(10, 10, 44, 44);
-            g.beginPath(); g.arc(32, 32, 16, 0, Math.PI * 2); g.strokePath();
-            g.strokeRect(4, 4, 12, 12); g.strokeRect(48, 4, 12, 12);
-        }, 64, 64);
-
-        // KRAKEN BOSS
-        makeNeon('tex_kraken', 0x00BFFF, (g) => {
-            g.beginPath(); g.arc(32, 32, 20, 0, Math.PI * 2); g.strokePath();
-            // tentacles
-            for (let i = 0; i < 8; i++) {
-                let a = (i / 8) * Math.PI * 2;
-                g.beginPath(); g.moveTo(32 + Math.cos(a) * 20, 32 + Math.sin(a) * 20);
-                g.lineTo(32 + Math.cos(a) * 30, 32 + Math.sin(a) * 30); g.strokePath();
-            }
-        }, 64, 64);
-
-        g = s.make.graphics({ add: false });
+        // Generate enemy bolt projectile
+        const g = s.make.graphics({ add: false });
         g.fillStyle(0xAA00FF, 0.8); g.fillCircle(4, 4, 4);
         g.fillStyle(0xFFFFFF); g.fillCircle(4, 4, 2);
         g.generateTexture('tex_enemy_bolt', 8, 8);
         g.destroy();
     }
 
-    _spawnAll() {
-        
-        const defs = [
-            { type: 'slime', tex: 'tex_slime', zone: { minX: 120, maxX: 830, minY: 120, maxY: 830 }, count: 10, hp: 30, atk: 5, spd: 45, xp: 15, range: 200 },
-            { type: 'skeleton', tex: 'tex_skeleton', zone: { minX: 2120, maxX: 2830, minY: 140, maxY: 730 }, count: 8, hp: 50, atk: 10, spd: 65, xp: 25, range: 250 },
-            { type: 'wolf', tex: 'tex_wolf', zone: { minX: 120, maxX: 780, minY: 2120, maxY: 2780 }, count: 8, hp: 35, atk: 12, spd: 95, xp: 20, range: 300 },
-            { type: 'darkmage', tex: 'tex_darkmage', zone: { minX: 2100, maxX: 2700, minY: 2100, maxY: 2700 }, count: 5, hp: 70, atk: 15, spd: 50, xp: 35, range: 280 },
-        ];
-
-        // Spawn standard mobs
-        defs.forEach(d => {
-            for (let i = 0; i < d.count; i++) {
-                this._spawn({ ...d, id: `mob_${d.type}_${i}` });
-            }
-        });
-
-        // Spawn Bosses
-        this._spawn({
-            id: 'boss_dragon', type: 'dragon', tex: 'tex_dragon',
-            x: 2500, y: 400, hp: 1000, atk: 30, spd: 80, xp: 500, range: 400, isBoss: true
-        });
-
-        this._spawn({
-            id: 'boss_kraken', type: 'kraken', tex: 'tex_kraken',
-            x: 2500, y: 2500, hp: 800, atk: 25, spd: 40, xp: 400, range: 350, isBoss: true
-        });
-    }
-
     _spawn(def) {
-        
-        let x = def.x;
-        let y = def.y;
-        if (x === undefined) {
-            x = Phaser.Math.Between(def.zone.minX, def.zone.maxX);
-            y = Phaser.Math.Between(def.zone.minY, def.zone.maxY);
-            if (def.type === 'darkmage' && Math.hypot(x - 2500, y - 2500) < 250) return; // keep out of lake center
+        const info = ENEMY_FRAMES[def.type];
+        let e;
+
+        if (info && this.scene.textures.exists(info.tex)) {
+            e = this.scene.physics.add.sprite(def.x, def.y, info.tex, info.frame);
+        } else {
+            // Fallback: simple colored circle
+            const colors = { slime: 0x4CAF50, skeleton: 0xBDBDBD, wolf: 0x757575, darkmage: 0x7B1FA2, dragon: 0xFF0000, kraken: 0x00BCD4 };
+            const key = `tex_fb_${def.type}`;
+            if (!this.scene.textures.exists(key)) {
+                const g = this.scene.make.graphics({ add: false });
+                g.fillStyle(colors[def.type] || 0xFF00FF);
+                g.fillCircle(16, 16, def.isBoss ? 24 : 14);
+                g.generateTexture(key, def.isBoss ? 48 : 32, def.isBoss ? 48 : 32);
+                g.destroy();
+            }
+            e = this.scene.physics.add.sprite(def.x, def.y, key);
         }
 
-        const e = this.scene.physics.add.sprite(x, y, def.tex);
-        e.setDepth(y).setScale(def.isBoss ? 1.5 : 1.2).setCollideWorldBounds(true);
-        e.body.setCircle(def.isBoss ? 24 : 12);
+        const scale = def.isBoss ? 0.15 : 0.08;
+        e.setDepth(def.y).setScale(scale).setCollideWorldBounds(true);
+        e.body.setCircle(def.isBoss ? 20 : 12);
+
+        // Name label
+        const names = { slime: '🟢 Слайм', skeleton: '💀 Скелет', wolf: '🐺 Волк', darkmage: '🟣 Тёмный маг', dragon: '🐉 ДРАКОН', kraken: '🐙 КРАКЕН' };
+        e.nameLabel = this.scene.add.text(def.x, def.y - (def.isBoss ? 50 : 25), names[def.type] || def.type, {
+            font: def.isBoss ? 'bold 12px Inter' : '9px Inter',
+            fill: def.isBoss ? '#FF4444' : '#FFFFFF',
+            stroke: '#000', strokeThickness: 2
+        }).setOrigin(0.5).setDepth(def.y + 1);
 
         Object.assign(e, {
             mobId: def.id, enemyType: def.type,
-            maxHp: def.hp, hp: def.hp, atkPow: def.atk, moveSpd: def.spd, xpVal: def.xp, detectRange: def.range,
-            alive: true, def, wanderTimer: 0,
-            wanderAngle: Math.random() * Math.PI * 2, lastAtk: 0, isBoss: def.isBoss
+            maxHp: def.hp, hp: def.hp, atkPow: def.atk, moveSpd: def.spd,
+            xpVal: def.xp, detectRange: def.range,
+            alive: true, def: { ...def },
+            wanderTimer: 0, wanderAngle: Math.random() * Math.PI * 2, lastAtk: 0,
+            isBoss: def.isBoss || false
+        });
+
+        // Breathing animation for enemies
+        this.scene.tweens.add({
+            targets: e, scaleX: scale * 1.08, scaleY: scale * 0.92,
+            duration: 800 + Math.random() * 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
         });
 
         e.hpBg = this.scene.add.graphics();
@@ -127,17 +139,15 @@ export class EnemySystem {
         this.enemies.add(e);
     }
 
-    // Called when another player hits a mob
+    // Network hit from another player
     applyNetworkHit(mobId, dmg) {
         const enemy = this.enemies.getChildren().find(e => e.mobId === mobId);
         if (enemy && enemy.alive) {
             enemy.hp -= dmg;
             this._floatText(enemy.x, enemy.y - 18, `-${dmg}`, '#FFAAFF');
-            if (enemy.hp <= 0) this._kill(enemy, false); // false = not local kill so no XP
-            else {
-                enemy.setTint(0xFF0000);
-                this.scene.time.delayedCall(100, () => { if (enemy.active) enemy.clearTint(); });
-            }
+            enemy.setTint(0xFF0000);
+            this.scene.time.delayedCall(100, () => { if (enemy.active) enemy.clearTint(); });
+            if (enemy.hp <= 0) this._kill(enemy, false);
         }
     }
 
@@ -148,34 +158,32 @@ export class EnemySystem {
             const dist = Phaser.Math.Distance.Between(px, py, e.x, e.y);
 
             if (dist < e.detectRange) {
-                // CHASE
                 const a = Phaser.Math.Angle.Between(e.x, e.y, px, py);
                 e.setVelocity(Math.cos(a) * e.moveSpd, Math.sin(a) * e.moveSpd);
-                e.setRotation(a + Math.PI / 2);
 
-                // Melee attack
                 if (dist < (e.isBoss ? 60 : 36) && time - e.lastAtk > (e.isBoss ? 800 : 1200)) {
                     e.lastAtk = time;
                     this._hurtPlayer(e);
                 }
-                // Ranged attack (Dark Mage & Kraken)
                 if ((e.enemyType === 'darkmage' || e.enemyType === 'kraken') && dist > 80 && dist < 300 && time - e.lastAtk > 1800) {
                     e.lastAtk = time;
                     this._shootAtPlayer(e, px, py);
                 }
             } else {
-                // WANDER
                 e.wanderTimer -= delta;
                 if (e.wanderTimer <= 0) {
                     e.wanderTimer = Phaser.Math.Between(2000, 5000);
                     e.wanderAngle = Math.random() * Math.PI * 2;
                     if (Math.random() < 0.25) { e.setVelocity(0, 0); return; }
                 }
-                e.setVelocity(Math.cos(e.wanderAngle) * e.moveSpd * 0.35, Math.sin(e.wanderAngle) * e.moveSpd * 0.35);
-                e.setRotation(e.wanderAngle + Math.PI / 2);
+                e.setVelocity(
+                    Math.cos(e.wanderAngle) * e.moveSpd * 0.35,
+                    Math.sin(e.wanderAngle) * e.moveSpd * 0.35
+                );
             }
 
             e.setDepth(e.y);
+            if (e.nameLabel) e.nameLabel.setPosition(e.x, e.y - (e.isBoss ? 50 : 25)).setDepth(e.y + 1);
             this._drawHP(e);
         });
 
@@ -195,7 +203,6 @@ export class EnemySystem {
 
         this._floatText(this.scene.player.x, this.scene.player.y - 25, `-${dmg}`, '#FF4B4B');
         if (window.updateHUD) window.updateHUD();
-
         if (u.hp <= 0) this._playerDie();
     }
 
@@ -205,7 +212,6 @@ export class EnemySystem {
         bolt.damage = Math.max(1, e.atkPow - 3);
         const a = Phaser.Math.Angle.Between(e.x, e.y, px, py);
         bolt.setVelocity(Math.cos(a) * (e.isBoss ? 240 : 160), Math.sin(a) * (e.isBoss ? 240 : 160));
-        bolt.setRotation(a);
 
         this.scene.physics.add.overlap(bolt, this.scene.player, () => {
             const u = this.scene.currentUser;
@@ -236,7 +242,7 @@ export class EnemySystem {
         this.scene.time.delayedCall(100, () => { if (enemy.active) enemy.clearTint(); });
         this._floatText(enemy.x, enemy.y - 18, `-${amount}`, '#FFD700');
 
-        // Broadcast hit!
+        // Broadcast hit to other players
         broadcastMobHit({ mobId: enemy.mobId, dmg: amount });
 
         if (enemy.hp <= 0) this._kill(enemy, true);
@@ -247,15 +253,15 @@ export class EnemySystem {
         enemy.setVelocity(0, 0);
 
         this.scene.tweens.add({
-            targets: enemy, alpha: 0, scale: 0.2, duration: 400,
+            targets: enemy, alpha: 0, scale: 0.02, duration: 500,
             onComplete: () => {
                 enemy.hpBg.clear(); enemy.hpFill.clear();
+                if (enemy.nameLabel) enemy.nameLabel.setVisible(false);
                 enemy.setActive(false).setVisible(false);
                 enemy.body.enable = false;
             }
         });
 
-        // XP & Loot only if local player killed it (prevent double XP, though could be shared)
         if (isLocalKiller) {
             const u = this.scene.currentUser;
             u.xp = (u.xp || 0) + enemy.xpVal;
@@ -264,29 +270,32 @@ export class EnemySystem {
             this._floatText(enemy.x, enemy.y - 25, `+${enemy.xpVal} XP`, '#4FC3F7');
 
             if (enemy.isBoss) {
-                this.scene.questSystem?.showNotification(`🔥 Босс повержен! Огромная награда! +${enemy.xpVal}XP`);
+                this.scene.questSystem?.showNotification(`🔥 Босс повержен! +${enemy.xpVal} XP`);
             }
 
             // Loot
             if (this.scene.inventorySystem && (Math.random() < 0.4 || enemy.isBoss)) {
-                for (let i = 0; i < (enemy.isBoss ? 5 : 1); i++) {
-                    const drops = ['health_potion', 'big_health_potion', 'mushroom_item', 'gold_ring', 'iron_sword'];
+                const drops = ['health_potion', 'big_health_potion', 'mushroom_item', 'gold_ring', 'iron_sword'];
+                const count = enemy.isBoss ? 5 : 1;
+                for (let i = 0; i < count; i++) {
                     this.scene.inventorySystem.addItem(drops[Math.floor(Math.random() * drops.length)]);
                 }
             }
         }
 
-        // Particle burst
+        // Particles
         if (this.scene.textures.exists('tex_sparkle')) {
             const p = this.scene.add.particles(enemy.x, enemy.y, 'tex_sparkle', {
-                speed: { min: 40, max: 150 }, lifespan: 800, quantity: enemy.isBoss ? 40 : 15,
-                scale: { start: enemy.isBoss ? 3 : 1.5, end: 0 }, alpha: { start: 1, end: 0 }, emitting: false,
-                blendMode: 'ADD'
+                speed: { min: 40, max: 150 }, lifespan: 800,
+                quantity: enemy.isBoss ? 35 : 15,
+                scale: { start: enemy.isBoss ? 3 : 1.5, end: 0 },
+                alpha: { start: 1, end: 0 }, emitting: false
             });
-            p.explode(enemy.isBoss ? 40 : 15); this.scene.time.delayedCall(1000, () => p.destroy());
+            p.explode(enemy.isBoss ? 35 : 15);
+            this.scene.time.delayedCall(1000, () => p.destroy());
         }
 
-        // Queue respawn
+        // Respawn — same fixed position from def
         this.respawnQueue.push({ def: enemy.def, time: this.scene.time.now + (enemy.isBoss ? 60000 : 15000) });
     }
 
@@ -297,16 +306,16 @@ export class EnemySystem {
     }
 
     _drawHP(e) {
-        const w = e.isBoss ? 60 : 24, h = e.isBoss ? 6 : 3;
-        const x = e.x - w / 2, y = e.y - (e.isBoss ? 45 : 20), pct = e.hp / e.maxHp;
+        const w = e.isBoss ? 60 : 28, h = e.isBoss ? 6 : 3;
+        const x = e.x - w / 2, y = e.y - (e.isBoss ? 40 : 18), pct = e.hp / e.maxHp;
         e.hpBg.clear().fillStyle(0x000000, 0.6).fillRect(x, y, w, h).setDepth(e.y + 1);
-        const c = pct > 0.5 ? 0x00FF00 : pct > 0.25 ? 0xFFFF00 : 0xFF0000;
+        const c = pct > 0.5 ? 0x4CAF50 : pct > 0.25 ? 0xFFC107 : 0xFF4B4B;
         e.hpFill.clear().fillStyle(c).fillRect(x, y, w * pct, h).setDepth(e.y + 2);
     }
 
     _floatText(x, y, text, color) {
         const t = this.scene.add.text(x, y, text, {
-            font: 'bold 15px Inter', fill: color, stroke: '#000', strokeThickness: 3
+            font: 'bold 14px Inter', fill: color, stroke: '#000', strokeThickness: 3
         }).setOrigin(0.5).setDepth(10000);
         this.scene.tweens.add({ targets: t, y: y - 40, alpha: 0, duration: 1000, onComplete: () => t.destroy() });
     }
