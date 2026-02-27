@@ -1,61 +1,210 @@
 <!DOCTYPE html>
 <html lang="ru">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Age of bbooster Heroes (Phaser)</title>
-    <link rel="stylesheet" href="css/style.css"> <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <title>Age of bbooster Heroes</title>
+    <meta name="description" content="Многопользовательская RPG-бродилка в браузере">
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <script type="module" src="js/main.js"></script>
-    <style>
-        body { margin: 0; background: #1a1a1a; overflow: hidden; font-family: 'Press Start 2P', cursive; }
-        
-        /* Контейнер игры скрыт по умолчанию */
-        #game-container { 
-            display: none; 
-            width: 100%; 
-            height: 100vh;
-        }
-
-        /* Меню поверх всего */
-        #ui-layer {
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            pointer-events: none; /* Чтобы клики проходили сквозь пустые места */
-        }
-
-        /* Экраны меню */
-        .screen {
-            pointer-events: auto; /* А тут клики ловим */
-            background: rgba(0,0,0,0.85);
-            padding: 20px;
-            border: 2px solid #FFD700;
-            text-align: center;
-            display: none; /* Скрыты */
-        }
-        .screen.active { display: block; }
-        
-        input { display: block; margin: 10px auto; padding: 10px; width: 80%; }
-        button { padding: 10px 20px; cursor: pointer; background: #FFD700; border: none; font-weight: bold; }
-    </style>
 </head>
+
 <body>
 
+    <!-- ========== LOGIN SCREEN ========== -->
+    <div id="login-screen" class="screen active">
+        <div class="particles" id="particles"></div>
+        <div class="login-box glass">
+            <div class="logo">
+                <span class="logo-sub">AGE OF</span>
+                <span class="logo-main">BBOOSTER</span>
+                <span class="logo-sub">HEROES</span>
+            </div>
+            <div class="login-form">
+                <div class="input-group">
+                    <span class="input-icon">⚔️</span>
+                    <input type="text" id="login-input" placeholder="Login" autocomplete="off">
+                </div>
+                <div class="input-group">
+                    <span class="input-icon">🔒</span>
+                    <input type="password" id="pass-input" placeholder="Password">
+                </div>
+                <button id="btn-login" class="btn-primary">
+                    <span>PLAY</span>
+                    <div class="btn-glow"></div>
+                </button>
+                <p class="hint">Новый логин = автоматическая регистрация</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== CLASS SELECT ========== -->
+    <div id="class-screen" class="screen">
+        <h2 class="screen-title">Выбери свой класс</h2>
+        <div class="class-cards">
+            <div class="class-card glass" data-class="warrior">
+                <div class="card-glow warrior-glow"></div>
+                <div class="class-icon">⚔️</div>
+                <h3>Воин</h3>
+                <p class="class-desc">Мощный боец ближнего боя</p>
+                <div class="class-stats">
+                    <div class="stat"><span class="stat-icon">❤️</span><span class="stat-val">120</span></div>
+                    <div class="stat"><span class="stat-icon">⚔️</span><span class="stat-val">15</span></div>
+                    <div class="stat"><span class="stat-icon">🛡️</span><span class="stat-val">10</span></div>
+                    <div class="stat"><span class="stat-icon">👟</span><span class="stat-val">180</span></div>
+                </div>
+                <button class="btn-select">Выбрать</button>
+            </div>
+            <div class="class-card glass" data-class="mage">
+                <div class="card-glow mage-glow"></div>
+                <div class="class-icon">🧙‍♂️</div>
+                <h3>Маг</h3>
+                <p class="class-desc">Разрушительная магическая сила</p>
+                <div class="class-stats">
+                    <div class="stat"><span class="stat-icon">❤️</span><span class="stat-val">90</span></div>
+                    <div class="stat"><span class="stat-icon">⚔️</span><span class="stat-val">18</span></div>
+                    <div class="stat"><span class="stat-icon">🛡️</span><span class="stat-val">5</span></div>
+                    <div class="stat"><span class="stat-icon">👟</span><span class="stat-val">200</span></div>
+                </div>
+                <button class="btn-select">Выбрать</button>
+            </div>
+            <div class="class-card glass" data-class="archer">
+                <div class="card-glow archer-glow"></div>
+                <div class="class-icon">🏹</div>
+                <h3>Лучник</h3>
+                <p class="class-desc">Быстрый и точный стрелок</p>
+                <div class="class-stats">
+                    <div class="stat"><span class="stat-icon">❤️</span><span class="stat-val">100</span></div>
+                    <div class="stat"><span class="stat-icon">⚔️</span><span class="stat-val">12</span></div>
+                    <div class="stat"><span class="stat-icon">🛡️</span><span class="stat-val">7</span></div>
+                    <div class="stat"><span class="stat-icon">👟</span><span class="stat-val">240</span></div>
+                </div>
+                <button class="btn-select">Выбрать</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== GAME CONTAINER ========== -->
     <div id="game-container"></div>
 
-    <div id="ui-layer">
-        
-        <div id="login-screen" class="screen active">
-            <h1 style="color:#FFD700">bbooster<br>Heroes</h1>
-            <input type="text" id="login-input" placeholder="Login">
-            <input type="password" id="pass-input" placeholder="Password">
-            <button id="btn-login">PLAY</button>
+    <!-- ========== HUD OVERLAY ========== -->
+    <div id="hud" class="hidden">
+        <!-- TOP BAR -->
+        <div id="hud-top" class="glass">
+            <div id="player-info">
+                <span id="hud-class-icon">⚔️</span>
+                <span id="hud-name">Player</span>
+                <span id="hud-level" class="badge">Lv.1</span>
+            </div>
+            <div id="bars">
+                <div class="bar hp-bar">
+                    <div class="bar-fill" id="hp-fill"></div>
+                    <span class="bar-text" id="hp-text">100/100</span>
+                </div>
+                <div class="bar xp-bar">
+                    <div class="bar-fill" id="xp-fill"></div>
+                    <span class="bar-text" id="xp-text">0/100 XP</span>
+                </div>
+            </div>
         </div>
 
+        <!-- ACTION BAR -->
+        <div id="hud-actions">
+            <button class="action-btn" id="btn-chat" title="Чат">💬</button>
+            <button class="action-btn" id="btn-emotes" title="Эмоции">😊</button>
+            <button class="action-btn" id="btn-inventory" title="Инвентарь">🎒</button>
+            <button class="action-btn" id="btn-stats" title="Персонаж">📊</button>
+            <button class="action-btn" id="btn-quests" title="Квесты">📜</button>
+        </div>
+
+        <!-- CHAT PANEL -->
+        <div id="chat-panel" class="hud-panel glass hidden">
+            <div id="chat-messages"></div>
+            <div id="chat-input-row">
+                <input type="text" id="chat-input" placeholder="Сообщение..." maxlength="100">
+                <button id="chat-send">➤</button>
+            </div>
+        </div>
+
+        <!-- EMOTES PANEL -->
+        <div id="emotes-panel" class="hud-panel glass hidden">
+            <button class="emote-btn" data-emote="wave">👋</button>
+            <button class="emote-btn" data-emote="laugh">😂</button>
+            <button class="emote-btn" data-emote="love">❤️</button>
+            <button class="emote-btn" data-emote="fight">⚔️</button>
+            <button class="emote-btn" data-emote="party">🎉</button>
+            <button class="emote-btn" data-emote="think">🤔</button>
+            <button class="emote-btn" data-emote="cry">😢</button>
+            <button class="emote-btn" data-emote="fire">🔥</button>
+        </div>
+
+        <!-- PLAYER INTERACTION -->
+        <div id="player-interact" class="hud-panel glass hidden">
+            <h4 id="interact-name">Player</h4>
+            <div class="interact-buttons">
+                <button class="interact-btn" id="btn-duel">⚔️ Дуэль</button>
+                <button class="interact-btn" id="btn-whisper">💬 Чат</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== MODALS ========== -->
+    <div id="inventory-modal" class="modal hidden">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h3>🎒 Инвентарь</h3>
+                <button class="close-btn" data-close="inventory-modal">✕</button>
+            </div>
+            <div id="inventory-grid"></div>
+        </div>
+    </div>
+
+    <div id="stats-modal" class="modal hidden">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h3>📊 Персонаж</h3>
+                <button class="close-btn" data-close="stats-modal">✕</button>
+            </div>
+            <div id="stats-content"></div>
+        </div>
+    </div>
+
+    <div id="quest-modal" class="modal hidden">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h3>📜 Квесты</h3>
+                <button class="close-btn" data-close="quest-modal">✕</button>
+            </div>
+            <div id="quest-list"></div>
+        </div>
+    </div>
+
+    <div id="duel-modal" class="modal hidden">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h3>⚔️ Дуэль</h3>
+                <button class="close-btn" data-close="duel-modal">✕</button>
+            </div>
+            <div id="duel-content"></div>
+        </div>
+    </div>
+
+    <div id="dialog-modal" class="modal hidden">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h3 id="dialog-npc-name">NPC</h3>
+                <button class="close-btn" data-close="dialog-modal">✕</button>
+            </div>
+            <p id="dialog-text"></p>
+            <div id="dialog-options"></div>
+        </div>
     </div>
 
 </body>
+
 </html>

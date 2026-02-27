@@ -1,311 +1,728 @@
-@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;600;700&display=swap');
+
+/* ===========================
+   CSS VARIABLES
+=========================== */
+:root {
+    --bg-dark: #0a0a1a;
+    --bg-card: rgba(255,255,255,0.05);
+    --glass: rgba(255,255,255,0.08);
+    --glass-border: rgba(255,255,255,0.12);
+    --gold: #FFD700;
+    --gold-dim: #B8960F;
+    --red: #FF4B4B;
+    --green: #4CAF50;
+    --blue: #42A5F5;
+    --purple: #AB47BC;
+    --text: #E0E0E0;
+    --text-dim: #888;
+    --warrior: #FF6B6B;
+    --mage: #64B5F6;
+    --archer: #81C784;
+    --font-pixel: 'Press Start 2P', cursive;
+    --font-ui: 'Inter', sans-serif;
+    --radius: 12px;
+    --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ===========================
+   RESET & BASE
+=========================== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-    background-color: #1a1a1a;
-    display: flex;
+    background: var(--bg-dark);
+    color: var(--text);
+    font-family: var(--font-ui);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.hidden { display: none !important; }
+
+/* ===========================
+   GLASSMORPHISM
+=========================== */
+.glass {
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+
+/* ===========================
+   SCREENS
+=========================== */
+.screen {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: none;
     justify-content: center;
     align-items: center;
-    height: 100vh;
-    margin: 0;
-    font-family: 'Press Start 2P', cursive;
-    color: white;
-    user-select: none;
+    z-index: 1000;
+    background: var(--bg-dark);
+}
+.screen.active { display: flex; }
+
+/* ===========================
+   LOGIN SCREEN
+=========================== */
+#login-screen {
+    background: radial-gradient(ellipse at 30% 20%, rgba(255,215,0,0.08) 0%, transparent 60%),
+                radial-gradient(ellipse at 70% 80%, rgba(66,165,245,0.06) 0%, transparent 50%),
+                var(--bg-dark);
+    flex-direction: column;
 }
 
-#game-container {
-    width: 360px;
-    height: 640px;
-    background: #2b2b2b;
-    border: 4px solid #8b7355;
+.particles {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    overflow: hidden;
+    pointer-events: none;
+}
+.particle {
+    position: absolute;
+    width: 3px; height: 3px;
+    background: var(--gold);
+    border-radius: 50%;
+    opacity: 0;
+    animation: float-up 6s infinite;
+}
+@keyframes float-up {
+    0% { transform: translateY(100vh) scale(0); opacity: 0; }
+    20% { opacity: 0.6; }
+    100% { transform: translateY(-20vh) scale(1); opacity: 0; }
+}
+
+.login-box {
+    width: 340px;
+    padding: 40px 30px;
+    border-radius: 20px;
+    text-align: center;
+    animation: fade-in 0.8s ease-out;
+}
+
+@keyframes fade-in {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.logo { margin-bottom: 30px; }
+.logo-sub {
+    display: block;
+    font-family: var(--font-pixel);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 4px;
+}
+.logo-main {
+    display: block;
+    font-family: var(--font-pixel);
+    font-size: 22px;
+    color: var(--gold);
+    text-shadow: 0 0 20px rgba(255,215,0,0.4);
+    margin: 8px 0;
+    letter-spacing: 2px;
+}
+
+.input-group {
+    display: flex;
+    align-items: center;
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    margin: 10px 0;
+    padding: 0 12px;
+    transition: border-color var(--transition);
+}
+.input-group:focus-within { border-color: var(--gold); }
+.input-icon { font-size: 16px; margin-right: 8px; }
+
+.input-group input {
+    flex: 1;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    padding: 14px 0;
+    outline: none;
+}
+.input-group input::placeholder { color: var(--text-dim); }
+
+.btn-primary {
+    position: relative;
+    width: 100%;
+    padding: 16px;
+    margin-top: 20px;
+    background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+    border: none;
+    border-radius: 10px;
+    color: #000;
+    font-family: var(--font-pixel);
+    font-size: 14px;
+    cursor: pointer;
+    overflow: hidden;
+    transition: transform var(--transition), box-shadow var(--transition);
+}
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(255,215,0,0.3);
+}
+.btn-primary:active { transform: translateY(0); }
+.btn-glow {
+    position: absolute;
+    top: -50%; left: -50%;
+    width: 200%; height: 200%;
+    background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 60%);
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+.btn-primary:hover .btn-glow { opacity: 1; }
+
+.hint {
+    margin-top: 14px;
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+/* ===========================
+   CLASS SELECT SCREEN
+=========================== */
+#class-screen {
+    background: radial-gradient(ellipse at 50% 30%, rgba(255,215,0,0.06) 0%, transparent 60%), var(--bg-dark);
+    flex-direction: column;
+    gap: 30px;
+}
+
+.screen-title {
+    font-family: var(--font-pixel);
+    font-size: 14px;
+    color: var(--gold);
+    text-shadow: 0 0 15px rgba(255,215,0,0.3);
+    animation: fade-in 0.5s ease-out;
+}
+
+.class-cards {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+    animation: fade-in 0.7s ease-out;
+}
+
+.class-card {
+    width: 200px;
+    padding: 24px 16px;
+    border-radius: 16px;
+    text-align: center;
+    cursor: pointer;
     position: relative;
     overflow: hidden;
-    box-shadow: 0 0 30px rgba(0,0,0,0.8);
+    transition: transform var(--transition), border-color var(--transition);
+}
+.class-card:hover {
+    transform: translateY(-8px) scale(1.02);
+    border-color: var(--gold);
 }
 
-.screen {
+.card-glow {
+    position: absolute;
+    top: -50%; left: -50%;
+    width: 200%; height: 200%;
+    opacity: 0;
+    transition: opacity 0.5s;
+    pointer-events: none;
+}
+.class-card:hover .card-glow { opacity: 1; }
+.warrior-glow { background: radial-gradient(circle, rgba(255,107,107,0.15) 0%, transparent 60%); }
+.mage-glow { background: radial-gradient(circle, rgba(100,181,246,0.15) 0%, transparent 60%); }
+.archer-glow { background: radial-gradient(circle, rgba(129,199,132,0.15) 0%, transparent 60%); }
+
+.class-icon { font-size: 48px; margin-bottom: 12px; }
+.class-card h3 {
+    font-family: var(--font-pixel);
+    font-size: 12px;
+    color: var(--gold);
+    margin-bottom: 6px;
+}
+.class-desc { font-size: 12px; color: var(--text-dim); margin-bottom: 14px; }
+
+.class-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 16px;
+}
+.stat {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    font-size: 12px;
+    background: rgba(0,0,0,0.3);
+    padding: 4px 6px;
+    border-radius: 6px;
+}
+.stat-icon { font-size: 12px; }
+.stat-val { font-weight: 700; }
+
+.btn-select {
+    width: 100%;
+    padding: 10px;
+    background: rgba(255,215,0,0.15);
+    border: 1px solid var(--gold-dim);
+    border-radius: 8px;
+    color: var(--gold);
+    font-family: var(--font-pixel);
+    font-size: 9px;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.btn-select:hover {
+    background: var(--gold);
+    color: #000;
+}
+
+/* ===========================
+   GAME CONTAINER
+=========================== */
+#game-container {
     display: none;
     width: 100%;
+    height: 100vh;
+    position: relative;
+}
+#game-container canvas { display: block; }
+
+/* ===========================
+   HUD
+=========================== */
+#hud {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 100;
+}
+#hud > * { pointer-events: auto; }
+
+/* TOP BAR */
+#hud-top {
+    position: absolute;
+    top: 10px; left: 10px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    min-width: 300px;
+}
+
+#player-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+#hud-class-icon { font-size: 20px; }
+#hud-name {
+    font-family: var(--font-pixel);
+    font-size: 10px;
+    color: var(--gold);
+}
+.badge {
+    font-family: var(--font-pixel);
+    font-size: 8px;
+    background: rgba(255,215,0,0.2);
+    color: var(--gold);
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--gold-dim);
+}
+
+#bars { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.bar {
+    position: relative;
+    height: 16px;
+    background: rgba(0,0,0,0.5);
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+.bar-fill {
     height: 100%;
-    flex-direction: column;
+    border-radius: 8px;
+    transition: width 0.5s ease;
+}
+.hp-bar .bar-fill {
+    width: 100%;
+    background: linear-gradient(90deg, var(--red), #FF8A80);
+}
+.xp-bar .bar-fill {
+    width: 0%;
+    background: linear-gradient(90deg, var(--blue), #80D8FF);
+}
+.bar-text {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 8px;
+    font-family: var(--font-pixel);
+    color: #fff;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+}
+
+/* ACTION BAR */
+#hud-actions {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 10px;
+}
+.action-btn {
+    width: 50px; height: 50px;
+    border-radius: 14px;
+    border: 1px solid var(--glass-border);
+    background: var(--glass);
+    backdrop-filter: blur(12px);
+    font-size: 22px;
+    cursor: pointer;
+    transition: all var(--transition);
+    display: flex;
     align-items: center;
     justify-content: center;
-    background: url('https://www.transparenttextures.com/patterns/dark-leather.png'), #3e2723;
+}
+.action-btn:hover {
+    transform: translateY(-4px);
+    border-color: var(--gold);
+    box-shadow: 0 6px 20px rgba(255,215,0,0.2);
+}
+.action-btn.active {
+    background: rgba(255,215,0,0.15);
+    border-color: var(--gold);
 }
 
-.screen.active {
-    display: flex;
-}
-
-h1, h2 { text-align: center; color: #ffd700; text-shadow: 2px 2px 0 #000; line-height: 1.5; }
-h1 span { color: #ff5722; font-size: 1.2em; }
-
-input {
-    background: #000;
-    border: 2px solid #8b7355;
-    color: #0f0;
-    padding: 10px;
-    margin: 10px;
-    font-family: inherit;
-    width: 70%;
-    text-align: center;
-}
-
-button {
-    background: #5d4037;
-    border: 2px solid #fff;
-    color: #fff;
-    padding: 15px;
-    margin: 10px;
-    font-family: inherit;
-    cursor: pointer;
-    box-shadow: 4px 4px 0 #000;
-}
-button:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #000; }
-.btn-small { padding: 5px 10px; font-size: 10px; }
-.btn-micro { padding: 5px; font-size: 8px; background: #d32f2f; }
-
-.info { font-size: 10px; color: #aaa; text-align: center; width: 80%; }
-
-/* Выбор класса */
-.classes-row { display: flex; gap: 10px; }
-.class-card {
-    border: 2px solid #8b7355;
-    padding: 10px;
-    cursor: pointer;
-    text-align: center;
-    transition: transform 0.2s;
-    background: rgba(0,0,0,0.3);
-}
-.class-card:hover { transform: scale(1.1); background: rgba(255,255,255,0.1); }
-.icon { font-size: 40px; margin-bottom: 5px; }
-
-/* Игра */
-#screen-game { justify-content: flex-start; }
-#ui-top {
-    width: 100%;
-    height: 40px;
-    background: #000;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0 10px;
-    box-sizing: border-box;
-    font-size: 12px;
-}
-
-#world-map {
-    width: 100%;
-    height: 500px;
-    background: #2e7d32; /* Трава */
-    position: relative;
-    cursor: crosshair;
-    overflow: hidden;
-    background-image: radial-gradient(#388e3c 15%, transparent 16%), radial-gradient(#388e3c 15%, transparent 16%);
-    background-size: 20px 20px;
-}
-
-.tree { position: absolute; font-size: 40px; pointer-events: none; z-index: 10; }
-
-.player-char {
+/* HUD PANELS */
+.hud-panel {
     position: absolute;
-    font-size: 30px;
-    transform: translate(-50%, -50%); /* Центрируем, чтобы координаты были в ногах */
-    text-align: center;
-    width: 60px;
-    z-index: 5;
-
-    /* --- МАГИЯ АНИМАЦИИ --- */
-    /* Плавно меняем top и left за 0.3 секунды */
-    transition: top 0.3s linear, left 0.3s linear; 
-    /* ---------------------- */
+    border-radius: var(--radius);
+    animation: slide-up 0.3s ease-out;
+}
+@keyframes slide-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
-/* Класс для разворота персонажа влево */
-.player-char.flipped .char-skin {
-    transform: scaleX(-1);
-    display: inline-block;
-}
-
-.player-name {
-    display: block;
-    font-size: 8px;
-    background: rgba(0,0,0,0.5);
-    padding: 2px;
-    border-radius: 4px;
-    margin-bottom: -5px;
-}
-
-#log-console {
-    height: 100px;
-    width: 100%;
-    background: #000;
-    font-size: 10px;
-    padding: 5px;
-    box-sizing: border-box;
-    overflow-y: auto;
-    border-top: 2px solid #8b7355;
-    color: #ccc;
-}
-
-/* --- ЧАТ (MODULAR) --- */
-#chat-widget {
-    position: absolute;
-    bottom: 10px;
-    left: 10px;
-    width: 250px;
-    height: 40px; /* Свернутое состояние */
-    background: rgba(0, 0, 0, 0.5);
-    border: 1px solid #8b7355;
-    border-radius: 5px;
+/* CHAT PANEL */
+#chat-panel {
+    bottom: 80px; left: 16px;
+    width: 320px;
+    max-height: 250px;
     display: flex;
     flex-direction: column;
-    z-index: 100;
-    transition: all 0.3s ease; /* Анимация */
-    overflow: hidden;
 }
-
-/* Состояние: РАЗВЕРНУТ */
-#chat-widget.expanded {
-    height: 200px;
-    width: 320px;
-    background: rgba(0, 0, 0, 0.85);
-    border-color: #ffd700;
-    box-shadow: 0 0 10px rgba(0,0,0,0.5);
-}
-
-/* Область сообщений */
 #chat-messages {
     flex: 1;
     overflow-y: auto;
-    padding: 5px;
-    font-size: 10px;
-    color: #fff;
+    padding: 10px;
+    font-size: 12px;
+    max-height: 200px;
     scrollbar-width: thin;
-    display: none; /* Скрыт в свернутом */
+    scrollbar-color: var(--gold-dim) transparent;
 }
-
-#chat-widget.expanded #chat-messages {
-    display: block;
+#chat-messages .msg {
+    margin-bottom: 4px;
+    line-height: 1.4;
 }
-
-/* Строка превью (последнее сообщение в свернутом виде) */
-#chat-preview {
-    height: 40px;
-    line-height: 40px;
-    padding: 0 10px;
-    font-size: 10px;
-    color: #ccc;
-    cursor: pointer;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+#chat-messages .msg-name {
+    color: var(--gold);
+    font-weight: 700;
 }
+#chat-messages .msg-text { color: var(--text); }
 
-#chat-widget.expanded #chat-preview {
-    display: none;
-}
-
-/* Поле ввода */
 #chat-input-row {
-    display: none; /* Скрыт в свернутом */
-    border-top: 1px solid #555;
-    height: 30px;
-}
-
-#chat-widget.expanded #chat-input-row {
     display: flex;
+    border-top: 1px solid var(--glass-border);
 }
-
 #chat-input {
     flex: 1;
     background: transparent;
     border: none;
-    color: white;
-    padding: 5px;
-    font-size: 10px;
+    color: var(--text);
+    padding: 10px 12px;
+    font-size: 13px;
+    font-family: var(--font-ui);
     outline: none;
-    width: 100%;
 }
-
-#chat-send-btn {
+#chat-input::placeholder { color: var(--text-dim); }
+#chat-send {
+    background: none;
     border: none;
-    background: #2e7d32;
-    color: white;
-    padding: 0 10px;
+    color: var(--gold);
+    font-size: 18px;
+    padding: 0 14px;
     cursor: pointer;
-    font-size: 10px;
+    transition: transform 0.2s;
+}
+#chat-send:hover { transform: scale(1.2); }
+
+/* EMOTES PANEL */
+#emotes-panel {
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    padding: 10px;
+}
+.emote-btn {
+    width: 44px; height: 44px;
+    border-radius: 10px;
+    border: 1px solid var(--glass-border);
+    background: rgba(0,0,0,0.3);
+    font-size: 22px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.emote-btn:hover {
+    transform: scale(1.15);
+    border-color: var(--gold);
+    background: rgba(255,215,0,0.1);
 }
 
-/* --- НПС --- */
-.npc {
-    position: absolute;
-    font-size: 35px;
+/* PLAYER INTERACTION */
+#player-interact {
+    bottom: 80px;
+    right: 16px;
+    padding: 14px;
     text-align: center;
-    cursor: pointer;
-    z-index: 10;
-    transform: translate(-50%, -50%);
+    min-width: 160px;
 }
-.npc:hover { transform: translate(-50%, -50%) scale(1.1); }
-
-.npc-name {
+#player-interact h4 {
+    font-family: var(--font-pixel);
     font-size: 10px;
-    background: #FFD700; /* Золотой цвет для легенды */
-    color: black;
-    padding: 2px 4px;
-    border-radius: 4px;
-    font-weight: bold;
+    color: var(--gold);
+    margin-bottom: 10px;
+}
+.interact-buttons { display: flex; flex-direction: column; gap: 6px; }
+.interact-btn {
+    padding: 8px 14px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.interact-btn:hover {
+    background: rgba(255,215,0,0.15);
+    border-color: var(--gold);
+    color: var(--gold);
 }
 
-/* --- ОКНО ДИАЛОГА --- */
-#dialog-overlay {
-    position: absolute;
+/* ===========================
+   MODALS
+=========================== */
+.modal {
+    position: fixed;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    background: rgba(0, 0, 0, 0.6); /* Затемнение фона */
+    background: rgba(0,0,0,0.6);
     display: flex;
     justify-content: center;
     align-items: center;
-    z-index: 1000; /* Поверх всего */
+    z-index: 2000;
+    animation: modal-bg-in 0.3s;
+}
+@keyframes modal-bg-in { from { opacity: 0; } to { opacity: 1; } }
+
+.modal-content {
+    width: 380px;
+    max-height: 80vh;
+    padding: 24px;
+    border-radius: 16px;
+    animation: modal-in 0.3s ease-out;
+    overflow-y: auto;
+}
+@keyframes modal-in {
+    from { opacity: 0; transform: scale(0.9) translateY(20px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
-.dialog-box {
-    width: 300px;
-    background: #2b2b2b;
-    border: 4px solid #FFD700;
-    padding: 20px;
-    text-align: center;
-    box-shadow: 0 0 20px #FFD700;
-    font-family: 'Press Start 2P', cursive;
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
 }
-
-#dialog-npc-name { color: #FFD700; margin-top: 0; text-transform: uppercase; }
-#dialog-text { 
-    color: white; 
-    font-size: 12px; 
-    line-height: 1.5; 
-    margin: 20px 0;
-    
-    /* --- ВАЖНОЕ ИСПРАВЛЕНИЕ --- */
-    white-space: pre-wrap; 
-    /* Это заставит браузер рисовать пробелы, даже если они в конце строки */
+.modal-header h3 {
+    font-family: var(--font-pixel);
+    font-size: 12px;
+    color: var(--gold);
 }
-
-.dialog-btn {
-    display: block;
-    width: 100%;
-    margin: 10px 0;
-    padding: 10px;
-    background: #5d4037;
-    color: white;
-    border: 2px solid #aaa;
+.close-btn {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    border: 1px solid var(--glass-border);
+    background: rgba(255,75,75,0.15);
+    color: var(--red);
+    font-size: 16px;
     cursor: pointer;
-    font-size: 10px;
+    transition: all 0.2s;
 }
-.dialog-btn:hover { background: #8d6e63; border-color: white; }
+.close-btn:hover { background: var(--red); color: #fff; }
 
-.close-dialog-btn {
-    background: #d32f2f;
-    margin-top: 15px;
-    font-size: 8px;
-    padding: 5px;
+/* INVENTORY GRID */
+#inventory-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+}
+#inventory-grid .inv-slot {
+    aspect-ratio: 1;
+    background: rgba(0,0,0,0.4);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+#inventory-grid .inv-slot:hover { border-color: var(--gold); }
+#inventory-grid .inv-slot.filled { background: rgba(255,215,0,0.05); }
+
+/* STATS CONTENT */
+#stats-content {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.stats-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px;
+    font-size: 13px;
+}
+.stats-row .stats-label { color: var(--text-dim); }
+.stats-row .stats-value { font-weight: 700; color: var(--gold); }
+
+/* QUEST LIST */
+#quest-list .quest-item {
+    padding: 10px;
+    margin-bottom: 8px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px;
+    border-left: 3px solid var(--gold);
+}
+#quest-list .quest-item h4 {
+    font-size: 12px;
+    color: var(--gold);
+    margin-bottom: 4px;
+}
+#quest-list .quest-item p {
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+/* DIALOG */
+#dialog-text {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+    margin-bottom: 16px;
+    white-space: pre-wrap;
+}
+#dialog-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+#dialog-options button {
+    padding: 10px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s;
+}
+#dialog-options button:hover {
+    background: rgba(255,215,0,0.1);
+    border-color: var(--gold);
+    color: var(--gold);
+}
+
+/* DUEL */
+#duel-content {
+    text-align: center;
+}
+.duel-arena {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    margin: 20px 0;
+}
+.duel-player {
+    text-align: center;
+}
+.duel-player .duel-icon { font-size: 40px; }
+.duel-player .duel-name { font-size: 11px; color: var(--gold); margin-top: 6px; }
+.duel-vs {
+    font-family: var(--font-pixel);
+    font-size: 18px;
+    color: var(--red);
+    text-shadow: 0 0 10px rgba(255,75,75,0.5);
+}
+.duel-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 16px;
+}
+.duel-actions button {
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: 1px solid var(--glass-border);
+    background: rgba(0,0,0,0.4);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.duel-actions button:hover {
+    border-color: var(--gold);
+    color: var(--gold);
+}
+.duel-actions button.btn-attack { border-color: var(--red); color: var(--red); }
+.duel-actions button.btn-defend { border-color: var(--blue); color: var(--blue); }
+
+/* ===========================
+   RESPONSIVE
+=========================== */
+@media (max-width: 680px) {
+    .class-cards { flex-direction: column; align-items: center; }
+    .class-card { width: 260px; }
+    #hud-top { min-width: auto; right: 10px; }
+    #chat-panel { width: calc(100% - 32px); }
+    .modal-content { width: calc(100% - 32px); margin: 0 16px; }
+    .action-btn { width: 44px; height: 44px; font-size: 18px; }
 }
