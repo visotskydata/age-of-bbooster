@@ -53,14 +53,9 @@ export class GameScene extends Phaser.Scene {
         this.hpBarBg = this.add.graphics();
         this.hpBarFill = this.add.graphics();
 
-        // 4. CAMERA & POST PROCESSING
+        // CAMERA
         this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
         this.cameras.main.setZoom(1.5).setBounds(0, 0, worldW, worldH);
-
-        // Add beautiful bloom effect
-        if (this.cameras.main.postFX) {
-            this.cameras.main.postFX.addBloom(0xffffff, 0.8, 0.8, 1, 1.2);
-        }
 
         // 5. INPUTS
         this.keys = this.input.keyboard.addKeys({ w: 'W', s: 'S', a: 'A', d: 'D', e: 'E', up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT' });
