@@ -117,3 +117,39 @@ export async function dbSendEmote(id, emote) {
 export async function dbUpdateStats(id, stats) {
     return await supabase.from('players').update(stats).eq('id', id);
 }
+
+// ===========================
+// REALTIME (Broadcast for active combat)
+// ===========================
+export const gameChannel = supabase.channel('room-1', {
+    config: {
+        broadcast: { ack: false, self: false },
+    },
+});
+
+export function initRealtime(onAttack, onMobHit) {
+    gameChannel
+        .on('broadcast', { event: 'attack' }, (payload) => {
+            if (onAttack) onAttack(payload.payload);
+        })
+        .on('broadcast', { event: 'mob_hit' }, (payload) => {
+            if (onMobHit) onMobHit(payload.payload);
+        })
+        .subscribe();
+}
+
+export function broadcastAttack(attackData) {
+    gameChannel.send({
+        type: 'broadcast',
+        event: 'attack',
+        payload: attackData
+    });
+}
+
+export function broadcastMobHit(hitData) {
+    gameChannel.send({
+        type: 'broadcast',
+        event: 'mob_hit',
+        payload: hitData
+    });
+}

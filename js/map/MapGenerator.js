@@ -34,12 +34,12 @@ export class MapGenerator {
         g.fillRect(0, 0, 128, 128);
         for (let i = 0; i < 80; i++) {
             g.fillStyle([0x4e8e3f, 0x528f42, 0x5da84d, 0x478537][i % 4], 0.5);
-            g.fillRect(Phaser.Math.Between(0, 124), Phaser.Math.Between(0, 124),
-                Phaser.Math.Between(2, 5), Phaser.Math.Between(2, 5));
+            g.fillRect(this.scene.rnd.between(0, 124), this.scene.rnd.between(0, 124),
+                this.scene.rnd.between(2, 5), this.scene.rnd.between(2, 5));
         }
         for (let i = 0; i < 15; i++) {
             g.fillStyle(0x6bb85a, 0.7);
-            g.fillRect(Phaser.Math.Between(0, 126), Phaser.Math.Between(0, 126), 1, Phaser.Math.Between(3, 6));
+            g.fillRect(this.scene.rnd.between(0, 126), this.scene.rnd.between(0, 126), 1, this.scene.rnd.between(3, 6));
         }
         g.generateTexture('tex_grass', 128, 128);
         g.destroy();
@@ -50,8 +50,8 @@ export class MapGenerator {
         g.fillRect(0, 0, 128, 128);
         for (let i = 0; i < 60; i++) {
             g.fillStyle([0x355e26, 0x2d5220, 0x3a6529, 0x305a22][i % 4], 0.5);
-            g.fillRect(Phaser.Math.Between(0, 124), Phaser.Math.Between(0, 124),
-                Phaser.Math.Between(2, 6), Phaser.Math.Between(2, 6));
+            g.fillRect(this.scene.rnd.between(0, 124), this.scene.rnd.between(0, 124),
+                this.scene.rnd.between(2, 6), this.scene.rnd.between(2, 6));
         }
         g.generateTexture('tex_grass_dark', 128, 128);
         g.destroy();
@@ -78,12 +78,12 @@ export class MapGenerator {
         g.fillRect(0, 0, 128, 128);
         for (let i = 0; i < 40; i++) {
             g.fillStyle([0x1976D2, 0x0D47A1, 0x1E88E5, 0x2196F3][i % 4], 0.4);
-            g.fillRect(Phaser.Math.Between(0, 100), Phaser.Math.Between(0, 124),
-                Phaser.Math.Between(10, 30), Phaser.Math.Between(2, 4));
+            g.fillRect(this.scene.rnd.between(0, 100), this.scene.rnd.between(0, 124),
+                this.scene.rnd.between(10, 30), this.scene.rnd.between(2, 4));
         }
         for (let i = 0; i < 8; i++) {
             g.fillStyle(0x64B5F6, 0.3);
-            g.fillRect(Phaser.Math.Between(0, 118), Phaser.Math.Between(0, 124), Phaser.Math.Between(5, 15), 1);
+            g.fillRect(this.scene.rnd.between(0, 118), this.scene.rnd.between(0, 124), this.scene.rnd.between(5, 15), 1);
         }
         g.generateTexture('tex_water', 128, 128);
         g.destroy();
@@ -94,8 +94,8 @@ export class MapGenerator {
         g.fillRect(0, 0, 128, 128);
         for (let i = 0; i < 40; i++) {
             g.fillStyle(i % 2 ? 0xD4C193 : 0xF0DDB0, 0.4);
-            g.fillRect(Phaser.Math.Between(0, 124), Phaser.Math.Between(0, 124),
-                Phaser.Math.Between(2, 4), Phaser.Math.Between(2, 4));
+            g.fillRect(this.scene.rnd.between(0, 124), this.scene.rnd.between(0, 124),
+                this.scene.rnd.between(2, 4), this.scene.rnd.between(2, 4));
         }
         g.generateTexture('tex_sand', 128, 128);
         g.destroy();
@@ -125,7 +125,7 @@ export class MapGenerator {
         g.fillStyle(0x6D4C41); g.fillRect(35, 40, 10, 60);
         g.fillStyle(0x558B2F); g.fillCircle(40, 35, 30);
         g.fillStyle(0x689F38, 0.7);
-        for (let i = 0; i < 12; i++) g.fillRect(Phaser.Math.Between(15, 65), 35, 2, Phaser.Math.Between(20, 45));
+        for (let i = 0; i < 12; i++) g.fillRect(this.scene.rnd.between(15, 65), 35, 2, this.scene.rnd.between(20, 45));
         g.fillStyle(0x7CB342, 0.5); g.fillCircle(35, 28, 15);
         g.generateTexture('tex_willow', 80, 100);
         g.destroy();
@@ -178,7 +178,7 @@ export class MapGenerator {
         g = s.make.graphics({ add: false });
         for (let i = 0; i < 6; i++) {
             g.fillStyle([0x7CB342, 0x689F38, 0x558B2F, 0x8BC34A][i % 4]);
-            g.fillRect(4 + i * 2, Phaser.Math.Between(2, 10), 2, Phaser.Math.Between(12, 22));
+            g.fillRect(4 + i * 2, this.scene.rnd.between(2, 10), 2, this.scene.rnd.between(12, 22));
         }
         g.generateTexture('tex_tallgrass', 20, 28);
         g.destroy();
@@ -346,14 +346,14 @@ export class MapGenerator {
         // Lily pads
         [{x:lx-140,y:ly-90},{x:lx+100,y:ly-70},{x:lx-80,y:ly+50},{x:lx+160,y:ly+110}].forEach(p => {
             const l = s.add.image(p.x, p.y, 'tex_lilypad').setDepth(-39);
-            s.tweens.add({ targets: l, y: p.y + 3, duration: Phaser.Math.Between(2000, 3500), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+            s.tweens.add({ targets: l, y: p.y + 3, duration: this.scene.rnd.between(2000, 3500), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
         });
 
         // Reeds
         [{x:lx-230,y:ly-140},{x:lx-250,y:ly-40},{x:lx-240,y:ly+80},{x:lx+230,y:ly-120},{x:lx+250,y:ly+60},{x:lx-80,y:ly+180},{x:lx+50,y:ly+190}]
         .forEach(p => {
             const r = s.add.image(p.x, p.y, 'tex_reed').setDepth(p.y);
-            s.tweens.add({ targets: r, angle: { from: -5, to: 5 }, duration: Phaser.Math.Between(1500, 2500), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+            s.tweens.add({ targets: r, angle: { from: -5, to: 5 }, duration: this.scene.rnd.between(1500, 2500), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
         });
     }
 
@@ -469,7 +469,7 @@ export class MapGenerator {
         // Tall grass everywhere
         this._scatter(100, 2900, 100, 2900, 40, (x, y) => {
             const tg = s.add.image(x, y, 'tex_tallgrass').setDepth(y - 2);
-            s.tweens.add({ targets: tg, angle: { from: -3, to: 3 }, duration: Phaser.Math.Between(1800, 2800), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+            s.tweens.add({ targets: tg, angle: { from: -3, to: 3 }, duration: this.scene.rnd.between(1800, 2800), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
         });
 
         // Scattered flowers across the map
@@ -514,8 +514,8 @@ export class MapGenerator {
     =========================== */
     _scatter(xMin, xMax, yMin, yMax, count, callback) {
         for (let i = 0; i < count; i++) {
-            const x = Phaser.Math.Between(xMin, xMax);
-            const y = Phaser.Math.Between(yMin, yMax);
+            const x = this.scene.rnd.between(xMin, xMax);
+            const y = this.scene.rnd.between(yMin, yMax);
             // Skip village center and lake center
             if (x > 1350 && x < 1650 && y > 1350 && y < 1650) continue;
             if (Math.hypot(x - 2500, y - 2500) < 250) continue;
