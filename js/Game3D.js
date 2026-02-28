@@ -47,6 +47,11 @@ export class Game3D {
         this.lastAtk = 0;
         this.lastSync = 0;
         this.respawnQ = [];
+        this.combatMode = false;
+        this.combatBlend = 0; // 0 = exploration, 1 = combat
+        this.timeScale = 1.0;
+        this.hitFreezeUntil = 0;
+        this.lastSwingAngle = 0;
         this.ragdollParts = []; // Physics-driven debris from dead enemies
 
         this._init();
@@ -876,6 +881,9 @@ export class Game3D {
         if (cls === 'warrior') {
             this._swingWeapon(swingDir);
             this._melee(pos, angle, comboDmg, true, swingDir);
+            // Camera shake on swing
+            this.shakeIntensity = 2;
+            this.lastSwingAngle = angle;
         } else if (cls === 'archer') {
             this._swingWeapon('thrust');
             this._ranged(pos, angle, comboDmg, 0x8D6E63, 400, 2000, true);
@@ -887,6 +895,8 @@ export class Game3D {
         // Show combo indicator
         if (state.combo > 0) {
             this._floatDmg(pos, `${state.combo + 1}x COMBO!`, '#FFD700');
+            // Slow-mo on max combo
+            if (state.combo >= 3) this._triggerSlowMo(0.3, 0.2);
         }
 
         broadcastAttack({ playerId: this.user.id, cls, x: Math.round(pos.x), z: Math.round(pos.z), angle, swingDir });
@@ -1035,6 +1045,15 @@ export class Game3D {
                     e.lastAtk = performance.now() + 300;
                     // Hit impact effect
                     this._hitImpact(e.model.position, swingDir);
+                    // === Phase 3 effects ===
+                    this._triggerHitFreeze(60);
+                    this._triggerScreenFlash('#FFFFFF', 100);
+                    this.shakeIntensity = 5;
+                    this.lastSwingAngle = angle;
+                    // Slow-mo on overhead kills
+                    if (e.hp <= 0 && (swingDir === 'overhead' || swingDir === 'thrust')) {
+                        this._triggerSlowMo(0.4, 0.15);
+                    }
                 }
             });
         }
@@ -1290,14 +1309,16 @@ export class Game3D {
             }
         });
 
-        // Camera shake decay
+        // Directional camera shake decay
         if (this.shakeIntensity > 0) {
-            this.shakeIntensity *= 0.9;
+            this.shakeIntensity *= 0.88;
             if (this.shakeIntensity < 0.1) this.shakeIntensity = 0;
+            const dirX = Math.sin(this.lastSwingAngle || 0) * 0.6;
+            const dirZ = Math.cos(this.lastSwingAngle || 0) * 0.6;
             this.shakeOffset.set(
-                (Math.random() - 0.5) * this.shakeIntensity,
-                (Math.random() - 0.5) * this.shakeIntensity * 0.5,
-                (Math.random() - 0.5) * this.shakeIntensity
+                (dirX + (Math.random() - 0.5) * 0.4) * this.shakeIntensity,
+                (Math.random() - 0.5) * this.shakeIntensity * 0.3,
+                (dirZ + (Math.random() - 0.5) * 0.4) * this.shakeIntensity
             );
         }
     }
@@ -1305,14 +1326,29 @@ export class Game3D {
     // =================== GAME LOOP ===================
     _loop() {
         requestAnimationFrame(() => this._loop());
-        const dt = this.clock.getDelta();
+        const rawDt = this.clock.getDelta();
         const time = performance.now();
+
+        // Hit freeze — skip updates for hitstop effect
+        if (time < this.hitFreezeUntil) {
+            this.composer.render();
+            return;
+        }
+
+        // Slow-motion recovery
+        if (this.timeScale < 1.0) {
+            this.timeScale = Math.min(1.0, this.timeScale + rawDt * 4);
+        }
+        const dt = rawDt * this.timeScale;
+
         this._updatePlayer(dt);
         this._updateEnemyAI(dt);
         this._updateProj(dt);
         this._updatePhysics(dt);
         this._updateAmbient(time, dt);
+        this._updateCombatCamera(dt);
         this._updateCam();
+        this._updateScreenEffects();
 
         // Sync every 500ms
         if (time - this.lastSync > 500) { this.lastSync = time; this._sync(); }
@@ -1393,13 +1429,22 @@ export class Game3D {
                         dmg = Math.round(dmg * 0.4);
                         this._floatDmg(this.playerModel.position, 'BLOCKED', '#44AAFF');
                         this.shakeIntensity = 1;
+                        this._triggerScreenFlash('#4488FF', 100);
                     } else {
                         this.shakeIntensity = e.def.isBoss ? 8 : 4;
+                        this._triggerScreenFlash('#FF0000', 200);
+                        this._triggerHitFreeze(40);
                     }
                     this.user.hp = Math.max(0, (this.user.hp || 100) - dmg);
                     this._floatDmg(this.playerModel.position, dmg, '#FF4B4B');
                     if (window.updateHUD) window.updateHUD();
-                    if (this.user.hp <= 0) { this.user.hp = this.user.max_hp || 100; this.playerModel.position.set(1500, 0, 1500); this._showNotification('💀 Ты погиб!'); }
+                    if (this.user.hp <= 0) {
+                        this._triggerSlowMo(0.5, 0.1);
+                        this._triggerScreenFlash('#FF0000', 500);
+                        this.user.hp = this.user.max_hp || 100;
+                        this.playerModel.position.set(1500, 0, 1500);
+                        this._showNotification('💀 Ты погиб!');
+                    }
                 }
             } else {
                 // Wander
@@ -1450,16 +1495,90 @@ export class Game3D {
         }
     }
 
+    _updateCombatCamera(dt) {
+        // Detect if enemies are nearby
+        const px = this.playerModel.position.x, pz = this.playerModel.position.z;
+        let nearestDist = Infinity;
+        this.enemies.forEach(e => {
+            if (!e.alive) return;
+            const d = Math.hypot(e.model.position.x - px, e.model.position.z - pz);
+            if (d < nearestDist) nearestDist = d;
+        });
+
+        const inCombat = nearestDist < 200;
+        const targetBlend = inCombat ? 1 : 0;
+        this.combatBlend += (targetBlend - this.combatBlend) * 0.03;
+        this.combatMode = this.combatBlend > 0.1;
+    }
+
     _updateCam() {
         const px = this.playerModel.position.x, pz = this.playerModel.position.z;
+        const cb = this.combatBlend || 0;
+
+        // Blend between exploration and combat camera
+        const camH = CAM_H * (1 - cb * 0.4);     // Lower in combat
+        const camDist = CAM_DIST * (1 - cb * 0.5); // Closer in combat
+        const lookY = cb * 5;                       // Look slightly up in combat
+
         // Smooth follow
         this.camera.position.x += (px + this.shakeOffset.x - this.camera.position.x) * 0.08;
-        this.camera.position.z += (pz + CAM_DIST + this.shakeOffset.z - this.camera.position.z) * 0.08;
-        this.camera.position.y += (CAM_H + this.shakeOffset.y - this.camera.position.y) * 0.08;
-        this.camera.lookAt(px, 0, pz);
+        this.camera.position.z += (pz + camDist + this.shakeOffset.z - this.camera.position.z) * 0.08;
+        this.camera.position.y += (camH + this.shakeOffset.y - this.camera.position.y) * 0.08;
+        this.camera.lookAt(px, lookY, pz);
+
+        // FOV change in combat (subtle zoom)
+        const targetFov = 60 - cb * 8;
+        this.camera.fov += (targetFov - this.camera.fov) * 0.05;
+        this.camera.updateProjectionMatrix();
 
         // Move sun with player
         this.sun.position.set(px + 300, 500, pz + 200);
         this.sun.target.position.set(px, 0, pz);
+    }
+
+    // =================== SCREEN EFFECTS ===================
+    _triggerSlowMo(duration = 0.2, scale = 0.3) {
+        this.timeScale = scale;
+        // Auto-recover handled in _loop
+    }
+
+    _triggerHitFreeze(durationMs = 50) {
+        this.hitFreezeUntil = performance.now() + durationMs;
+    }
+
+    _triggerScreenFlash(color = '#FFFFFF', duration = 150) {
+        if (this._flashDiv) this._flashDiv.remove();
+        const div = document.createElement('div');
+        div.style.cssText = `
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: ${color}; opacity: 0.3; pointer-events: none; z-index: 9998;
+            transition: opacity ${duration}ms ease-out;
+        `;
+        document.body.appendChild(div);
+        this._flashDiv = div;
+        requestAnimationFrame(() => { div.style.opacity = '0'; });
+        setTimeout(() => div.remove(), duration + 50);
+    }
+
+    _updateScreenEffects() {
+        // Low HP vignette
+        const hpPct = (this.user.hp || 100) / (this.user.max_hp || 100);
+        if (hpPct < 0.3) {
+            if (!this._vignetteDiv) {
+                const v = document.createElement('div');
+                v.style.cssText = `
+                    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    pointer-events: none; z-index: 9997;
+                    box-shadow: inset 0 0 120px rgba(255,0,0,0.5);
+                `;
+                document.body.appendChild(v);
+                this._vignetteDiv = v;
+            }
+            const pulse = 0.3 + Math.sin(performance.now() * 0.005) * 0.2;
+            this._vignetteDiv.style.boxShadow = `inset 0 0 120px rgba(255,0,0,${pulse})`;
+        } else if (this._vignetteDiv) {
+            this._vignetteDiv.remove();
+            this._vignetteDiv = null;
+        }
     }
 }
