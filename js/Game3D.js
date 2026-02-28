@@ -652,47 +652,113 @@ export class Game3D {
         const g = new THREE.Group();
         const c = MOB_COLORS[type] || 0xFF00FF;
         const s = isBoss ? 2.5 : 1;
+        const parts = {}; // Track body parts for dismemberment
 
         if (type === 'slime') {
             const body = new THREE.Mesh(new THREE.SphereGeometry(6 * s, 8, 6), new THREE.MeshStandardMaterial({ color: c, transparent: true, opacity: 0.85 }));
-            body.scale.y = 0.6; body.position.y = 4 * s; body.castShadow = true; g.add(body);
+            body.scale.y = 0.6; body.position.y = 4 * s; body.castShadow = true;
+            body.userData.bodyPart = 'torso';
+            g.add(body);
+            parts.torso = body;
             // Eyes
             [-2 * s, 2 * s].forEach(ox => {
                 const e = new THREE.Mesh(new THREE.SphereGeometry(1.2 * s, 4, 4), new THREE.MeshBasicMaterial({ color: 0x111111 }));
                 e.position.set(ox, 5 * s, 4 * s); g.add(e);
             });
         } else if (type === 'skeleton') {
+            // Torso
             const rib = new THREE.Mesh(new THREE.CylinderGeometry(2 * s, 1.5 * s, 12 * s, 6), new THREE.MeshStandardMaterial({ color: c }));
-            rib.position.y = 6 * s; rib.castShadow = true; g.add(rib);
+            rib.position.y = 6 * s; rib.castShadow = true;
+            rib.userData.bodyPart = 'torso';
+            g.add(rib);
+            parts.torso = rib;
+            // Head
             const skull = new THREE.Mesh(new THREE.SphereGeometry(3 * s, 6, 6), new THREE.MeshStandardMaterial({ color: 0xFAFAFA }));
-            skull.position.y = 14 * s; skull.castShadow = true; g.add(skull);
+            skull.position.y = 14 * s; skull.castShadow = true;
+            skull.userData.bodyPart = 'head';
+            g.add(skull);
+            parts.head = skull;
+            // Eyes
             [-1 * s, 1 * s].forEach(ox => {
                 const e = new THREE.Mesh(new THREE.SphereGeometry(0.8 * s, 4, 4), new THREE.MeshBasicMaterial({ color: 0x111111 }));
                 e.position.set(ox, 14.5 * s, 2 * s); g.add(e);
             });
+            // Right arm (sword arm)
+            const armR = new THREE.Mesh(new THREE.CylinderGeometry(0.8 * s, 0.6 * s, 8 * s, 4), new THREE.MeshStandardMaterial({ color: c }));
+            armR.position.set(3.5 * s, 8 * s, 0);
+            armR.userData.bodyPart = 'arm_right';
+            g.add(armR);
+            parts.armRight = armR;
+            // Left arm
+            const armL = new THREE.Mesh(new THREE.CylinderGeometry(0.8 * s, 0.6 * s, 8 * s, 4), new THREE.MeshStandardMaterial({ color: c }));
+            armL.position.set(-3.5 * s, 8 * s, 0);
+            armL.userData.bodyPart = 'arm_left';
+            g.add(armL);
+            parts.armLeft = armL;
+            // Legs
+            const legR = new THREE.Mesh(new THREE.CylinderGeometry(0.7 * s, 0.5 * s, 6 * s, 4), new THREE.MeshStandardMaterial({ color: 0xBDBDBD }));
+            legR.position.set(1.5 * s, -1 * s, 0);
+            legR.userData.bodyPart = 'leg_right';
+            g.add(legR);
+            parts.legRight = legR;
+            const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.7 * s, 0.5 * s, 6 * s, 4), new THREE.MeshStandardMaterial({ color: 0xBDBDBD }));
+            legL.position.set(-1.5 * s, -1 * s, 0);
+            legL.userData.bodyPart = 'leg_left';
+            g.add(legL);
+            parts.legLeft = legL;
+            // Sword
             const sword = new THREE.Mesh(new THREE.BoxGeometry(0.8 * s, 10 * s, 0.4 * s), new THREE.MeshStandardMaterial({ color: 0x888888 }));
             sword.position.set(4 * s, 8 * s, 0); g.add(sword);
+            parts.weapon = sword;
         } else if (type === 'wolf') {
             const body = new THREE.Mesh(new THREE.CapsuleGeometry(3 * s, 10 * s, 4, 8), new THREE.MeshStandardMaterial({ color: c }));
-            body.rotation.z = Math.PI / 2; body.position.y = 5 * s; body.castShadow = true; g.add(body);
+            body.rotation.z = Math.PI / 2; body.position.y = 5 * s; body.castShadow = true;
+            body.userData.bodyPart = 'torso';
+            g.add(body);
+            parts.torso = body;
             const head = new THREE.Mesh(new THREE.SphereGeometry(3 * s, 6, 6), new THREE.MeshStandardMaterial({ color: 0x9E9E9E }));
-            head.position.set(8 * s, 6 * s, 0); g.add(head);
+            head.position.set(8 * s, 6 * s, 0);
+            head.userData.bodyPart = 'head';
+            g.add(head);
+            parts.head = head;
             [-1 * s, 1 * s].forEach(ox => {
                 const e = new THREE.Mesh(new THREE.SphereGeometry(0.6 * s, 4, 4), new THREE.MeshBasicMaterial({ color: 0xFF0000 }));
                 e.position.set(9 * s, 7 * s, ox); g.add(e);
             });
         } else if (type === 'darkmage') {
+            // Robe (torso)
             const robe = new THREE.Mesh(new THREE.ConeGeometry(5 * s, 16 * s, 6), new THREE.MeshStandardMaterial({ color: c }));
-            robe.position.y = 8 * s; robe.castShadow = true; g.add(robe);
+            robe.position.y = 8 * s; robe.castShadow = true;
+            robe.userData.bodyPart = 'torso';
+            g.add(robe);
+            parts.torso = robe;
+            // Head
             const head = new THREE.Mesh(new THREE.SphereGeometry(2.5 * s, 6, 6), new THREE.MeshStandardMaterial({ color: 0x4A148C }));
-            head.position.y = 18 * s; g.add(head);
+            head.position.y = 18 * s;
+            head.userData.bodyPart = 'head';
+            g.add(head);
+            parts.head = head;
+            // Staff arm
+            const armR = new THREE.Mesh(new THREE.CylinderGeometry(0.6 * s, 0.5 * s, 8 * s, 4), new THREE.MeshStandardMaterial({ color: 0x4A148C }));
+            armR.position.set(4 * s, 12 * s, 0);
+            armR.userData.bodyPart = 'arm_right';
+            g.add(armR);
+            parts.armRight = armR;
+            // Orb
             const orb = new THREE.Mesh(new THREE.SphereGeometry(1.5 * s, 8, 8), new THREE.MeshStandardMaterial({ color: 0xE040FB, emissive: 0xE040FB, emissiveIntensity: 1 }));
             orb.position.set(5 * s, 16 * s, 0); g.add(orb);
+            parts.weapon = orb;
         } else if (type === 'dragon') {
             const body = new THREE.Mesh(new THREE.CapsuleGeometry(8, 20, 4, 8), new THREE.MeshStandardMaterial({ color: c }));
-            body.position.y = 15; body.castShadow = true; g.add(body);
+            body.position.y = 15; body.castShadow = true;
+            body.userData.bodyPart = 'torso';
+            g.add(body);
+            parts.torso = body;
             const head = new THREE.Mesh(new THREE.ConeGeometry(6, 12, 4), new THREE.MeshStandardMaterial({ color: 0xFF2200 }));
-            head.rotation.x = Math.PI / 2; head.position.set(0, 20, 14); g.add(head);
+            head.rotation.x = Math.PI / 2; head.position.set(0, 20, 14);
+            head.userData.bodyPart = 'head';
+            g.add(head);
+            parts.head = head;
             // Wings
             [-1, 1].forEach(side => {
                 const wing = new THREE.Mesh(new THREE.PlaneGeometry(25, 15), new THREE.MeshStandardMaterial({ color: 0xFF4400, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
@@ -700,12 +766,16 @@ export class Game3D {
             });
         } else if (type === 'kraken') {
             const body = new THREE.Mesh(new THREE.SphereGeometry(12, 8, 8), new THREE.MeshStandardMaterial({ color: c }));
-            body.position.y = 12; body.castShadow = true; g.add(body);
+            body.position.y = 12; body.castShadow = true;
+            body.userData.bodyPart = 'torso';
+            g.add(body);
+            parts.torso = body;
             for (let i = 0; i < 8; i++) {
                 const a = (i / 8) * Math.PI * 2;
                 const tent = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 0.5, 18, 6), new THREE.MeshStandardMaterial({ color: 0x00ACC1 }));
                 tent.position.set(Math.cos(a) * 14, 4, Math.sin(a) * 14);
                 tent.rotation.x = Math.cos(a) * 0.4; tent.rotation.z = Math.sin(a) * 0.4;
+                tent.userData.bodyPart = 'arm_right'; // Tentacles count as arms
                 g.add(tent);
             }
             // Eyes
@@ -718,6 +788,8 @@ export class Game3D {
         // Shadow
         const sh = new THREE.Mesh(new THREE.CircleGeometry(6 * s, 8), new THREE.MeshBasicMaterial({ color: 0, transparent: true, opacity: 0.2 }));
         sh.rotation.x = -Math.PI / 2; sh.position.y = 0.1; g.add(sh);
+
+        g.userData.parts = parts;
         return g;
     }
 
@@ -1036,26 +1108,200 @@ export class Game3D {
                 const d = Math.hypot(e.model.position.x - sx, e.model.position.z - sz);
                 const hitRange = e.def.isBoss ? 40 : 25;
                 if (d < hitRange) {
-                    this._dmg(e, dmg, angle, swingDir);
+                    // === Phase 4: Hit zone detection ===
+                    const hitZone = this._getHitZone(swingDir, e);
+                    const zoneMult = { head: 3.0, torso: 1.0, arm_right: 0.5, arm_left: 0.5, leg_right: 0.7, leg_left: 0.7 };
+                    const zoneDmg = Math.round(dmg * (zoneMult[hitZone] || 1.0));
+
+                    this._dmg(e, zoneDmg, angle, swingDir);
+
+                    // Zone-specific feedback
+                    const zoneColors = { head: '#FF2222', torso: '#FFD700', arm_right: '#FF8800', arm_left: '#FF8800', leg_right: '#FFAA44', leg_left: '#FFAA44' };
+                    const zoneLabels = { head: '💀 HEADSHOT!', arm_right: '✂️ ARM!', arm_left: '✂️ ARM!', leg_right: '🦵 LEG!', leg_left: '🦵 LEG!' };
+                    if (zoneLabels[hitZone]) {
+                        this._floatDmg(e.model.position, zoneLabels[hitZone], zoneColors[hitZone] || '#FFFFFF');
+                    }
+
+                    // Headshot bonus effects
+                    if (hitZone === 'head') {
+                        this._triggerSlowMo(0.3, 0.1);
+                        this._triggerHitFreeze(100);
+                        this._triggerScreenFlash('#FF4444', 200);
+                        this.shakeIntensity = 10;
+                    } else {
+                        this._triggerHitFreeze(60);
+                        this._triggerScreenFlash('#FFFFFF', 100);
+                        this.shakeIntensity = 5;
+                    }
+                    this.lastSwingAngle = angle;
+
                     // Physics-based knockback
                     const kbForce = swingDir === 'overhead' ? 8 : swingDir === 'thrust' ? 12 : 6;
                     e.model.position.x += Math.sin(angle) * kbForce;
                     e.model.position.z += Math.cos(angle) * kbForce;
-                    // Stagger effect - brief pause for enemy
+                    // Stagger effect
                     e.lastAtk = performance.now() + 300;
-                    // Hit impact effect
+                    // Hit impact
                     this._hitImpact(e.model.position, swingDir);
-                    // === Phase 3 effects ===
-                    this._triggerHitFreeze(60);
-                    this._triggerScreenFlash('#FFFFFF', 100);
-                    this.shakeIntensity = 5;
-                    this.lastSwingAngle = angle;
-                    // Slow-mo on overhead kills
-                    if (e.hp <= 0 && (swingDir === 'overhead' || swingDir === 'thrust')) {
+
+                    // === Dismemberment check ===
+                    if (hitZone !== 'torso' && zoneDmg > e.maxHp * 0.2) {
+                        this._dismemberPart(e, hitZone, angle, swingDir);
+                    }
+
+                    // Slow-mo on kills
+                    if (e.hp <= 0 && (swingDir === 'overhead' || swingDir === 'thrust' || hitZone === 'head')) {
                         this._triggerSlowMo(0.4, 0.15);
                     }
                 }
             });
+        }
+    }
+
+    // === PHASE 4: Hit Zone Detection ===
+    _getHitZone(swingDir, enemy) {
+        // Determine hit zone based on swing direction
+        const hasHead = enemy.model.userData.parts?.head;
+        const hasArms = enemy.model.userData.parts?.armRight || enemy.model.userData.parts?.armLeft;
+        const hasLegs = enemy.model.userData.parts?.legRight || enemy.model.userData.parts?.legLeft;
+
+        if (swingDir === 'overhead') {
+            // High attack — head or torso
+            if (hasHead && !enemy._dismembered?.head) return Math.random() < 0.6 ? 'head' : 'torso';
+            return 'torso';
+        }
+        if (swingDir === 'thrust') {
+            // Forward — torso mainly
+            return 'torso';
+        }
+        if (swingDir === 'right') {
+            // Right swing hits left side of enemy
+            const roll = Math.random();
+            if (roll < 0.3 && hasArms && !enemy._dismembered?.arm_left) return 'arm_left';
+            if (roll < 0.5 && hasLegs && !enemy._dismembered?.leg_left) return 'leg_left';
+            return 'torso';
+        }
+        if (swingDir === 'left') {
+            // Left swing hits right side
+            const roll = Math.random();
+            if (roll < 0.3 && hasArms && !enemy._dismembered?.arm_right) return 'arm_right';
+            if (roll < 0.5 && hasLegs && !enemy._dismembered?.leg_right) return 'leg_right';
+            return 'torso';
+        }
+        return 'torso';
+    }
+
+    // === PHASE 4: Dismemberment ===
+    _dismemberPart(enemy, partName, hitAngle, swingDir) {
+        if (!enemy._dismembered) enemy._dismembered = {};
+        if (enemy._dismembered[partName]) return; // Already dismembered
+        enemy._dismembered[partName] = true;
+
+        const parts = enemy.model.userData.parts;
+        if (!parts) return;
+
+        // Find the mesh to detach
+        let mesh = null;
+        if (partName === 'head') mesh = parts.head;
+        else if (partName === 'arm_right') mesh = parts.armRight;
+        else if (partName === 'arm_left') mesh = parts.armLeft;
+        else if (partName === 'leg_right') mesh = parts.legRight;
+        else if (partName === 'leg_left') mesh = parts.legLeft;
+        if (!mesh) return;
+
+        // Get world position before removing
+        const worldPos = new THREE.Vector3();
+        mesh.getWorldPosition(worldPos);
+
+        // Remove from enemy model
+        enemy.model.remove(mesh);
+
+        // Also remove weapon if arm is severed
+        if ((partName === 'arm_right') && parts.weapon) {
+            enemy.model.remove(parts.weapon);
+        }
+
+        // Create physics body for the flying part
+        const color = mesh.material?.color?.getHex() || 0xFF0000;
+        const flyMesh = new THREE.Mesh(mesh.geometry.clone(), new THREE.MeshStandardMaterial({ color, roughness: 0.6 }));
+        flyMesh.position.copy(worldPos);
+        flyMesh.castShadow = true;
+        this.scene.add(flyMesh);
+
+        // Cannon body
+        const shape = new CANNON.Sphere(2);
+        const body = new CANNON.Body({
+            mass: 1.5,
+            shape,
+            material: this.ragdollMaterial,
+            position: new CANNON.Vec3(worldPos.x, worldPos.y, worldPos.z),
+            linearDamping: 0.3,
+            angularDamping: 0.4
+        });
+
+        // Impulse away from hit direction
+        const force = 30;
+        const upForce = swingDir === 'overhead' ? 40 : 15;
+        body.applyImpulse(new CANNON.Vec3(
+            Math.sin(hitAngle) * force + (Math.random() - 0.5) * 15,
+            upForce + Math.random() * 10,
+            Math.cos(hitAngle) * force + (Math.random() - 0.5) * 15
+        ));
+        body.angularVelocity.set(
+            (Math.random() - 0.5) * 20,
+            (Math.random() - 0.5) * 20,
+            (Math.random() - 0.5) * 20
+        );
+
+        this.physicsWorld.addBody(body);
+        this.ragdollParts.push({ mesh: flyMesh, body, born: performance.now() });
+
+        // Blood splatter particles
+        this._bloodSplatter(worldPos, hitAngle);
+
+        // Apply debuffs
+        if (partName.startsWith('leg')) {
+            enemy._legDebuff = performance.now() + 5000;
+            this._floatDmg(enemy.model.position, '🐌 SLOW!', '#88CCFF');
+        }
+        if (partName.startsWith('arm')) {
+            enemy._armDebuff = performance.now() + 5000;
+            this._floatDmg(enemy.model.position, '💪 WEAK!', '#FF8844');
+        }
+        if (partName === 'head') {
+            // Instant kill on decapitation
+            this._floatDmg(enemy.model.position, '💀 DECAPITATED!', '#FF0000');
+            enemy.hp = 0;
+            this._killMob(enemy, true);
+        }
+    }
+
+    _bloodSplatter(pos, angle) {
+        const count = 12;
+        for (let i = 0; i < count; i++) {
+            const geo = new THREE.SphereGeometry(0.3 + Math.random() * 0.5, 4, 4);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xCC0000 });
+            const p = new THREE.Mesh(geo, mat);
+            p.position.copy(pos);
+            this.scene.add(p);
+
+            const vx = Math.sin(angle) * 3 + (Math.random() - 0.5) * 5;
+            const vy = 2 + Math.random() * 4;
+            const vz = Math.cos(angle) * 3 + (Math.random() - 0.5) * 5;
+            const start = performance.now();
+            const life = 800 + Math.random() * 600;
+
+            const anim = () => {
+                const t = (performance.now() - start) / life;
+                if (t >= 1) { this.scene.remove(p); p.geometry.dispose(); p.material.dispose(); return; }
+                p.position.x += vx * 0.016;
+                p.position.y += (vy - t * 12) * 0.016; // Gravity
+                p.position.z += vz * 0.016;
+                p.material.opacity = 1 - t;
+                p.material.transparent = true;
+                requestAnimationFrame(anim);
+            };
+            anim();
         }
     }
 
@@ -1415,15 +1661,17 @@ export class Game3D {
             const dist = Math.hypot(px - ex, pz - ez);
 
             if (dist < e.def.range) {
-                // Chase
+                // Chase (with leg debuff check)
                 const a = Math.atan2(px - ex, pz - ez);
-                e.model.position.x += Math.sin(a) * e.def.spd * dt;
-                e.model.position.z += Math.cos(a) * e.def.spd * dt;
+                const legSlow = (e._legDebuff && performance.now() < e._legDebuff) ? 0.3 : 1.0;
+                e.model.position.x += Math.sin(a) * e.def.spd * dt * legSlow;
+                e.model.position.z += Math.cos(a) * e.def.spd * dt * legSlow;
                 e.model.rotation.y = a;
                 // Melee
                 if (dist < (e.def.isBoss ? 40 : 20) && performance.now() - e.lastAtk > 1200) {
                     e.lastAtk = performance.now();
-                    let dmg = Math.max(1, e.def.atk - (this.user.defense || 5));
+                    const armWeak = (e._armDebuff && performance.now() < e._armDebuff) ? 0.6 : 1.0;
+                    let dmg = Math.max(1, Math.round((e.def.atk * armWeak) - (this.user.defense || 5)));
                     // Block reduces damage
                     if (this.isBlocking) {
                         dmg = Math.round(dmg * 0.4);
