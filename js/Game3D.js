@@ -4,6 +4,7 @@ import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/
 import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/shaders/FXAAShader.js';
+import * as CANNON from 'cannon-es';
 import { dbSync, initRealtime, broadcastAttack, broadcastMobHit } from './core/db.js';
 
 // ========== CONSTANTS ==========
@@ -46,8 +47,10 @@ export class Game3D {
         this.lastAtk = 0;
         this.lastSync = 0;
         this.respawnQ = [];
+        this.ragdollParts = []; // Physics-driven debris from dead enemies
 
         this._init();
+        this._initPhysics();
         this._world();
         this._createParticles();
         this._createClouds();
@@ -139,6 +142,134 @@ export class Game3D {
             this.composer.setSize(w, h);
             this.fxaaPass.material.uniforms['resolution'].value.set(1 / w, 1 / h);
         });
+    }
+
+    // =================== PHYSICS (Cannon.js) ===================
+    _initPhysics() {
+        this.physicsWorld = new CANNON.World({
+            gravity: new CANNON.Vec3(0, -60, 0)
+        });
+        this.physicsWorld.broadphase = new CANNON.NaiveBroadphase();
+        this.physicsWorld.solver.iterations = 5;
+        this.physicsWorld.allowSleep = true;
+
+        // Ground plane
+        const groundBody = new CANNON.Body({
+            mass: 0,
+            shape: new CANNON.Plane(),
+            material: new CANNON.Material({ friction: 0.5, restitution: 0.3 })
+        });
+        groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+        this.physicsWorld.addBody(groundBody);
+
+        // Physics material for ragdoll parts
+        this.ragdollMaterial = new CANNON.Material({ friction: 0.4, restitution: 0.5 });
+    }
+
+    _createRagdoll(enemy, hitAngle, swingDir) {
+        const pos = enemy.model.position.clone();
+        const parts = [];
+        const partDefs = [
+            { name: 'torso', geo: new THREE.CylinderGeometry(3, 2.5, 8, 6), color: enemy.model.children[0]?.material?.color?.getHex() || 0x888888, mass: 5, size: [3, 4, 3], y: 8 },
+            { name: 'head', geo: new THREE.SphereGeometry(2.5, 6, 6), color: 0xFFD5B0, mass: 2, size: [2.5], y: 16 },
+            { name: 'arm_l', geo: new THREE.CylinderGeometry(1, 0.8, 6, 4), color: 0xFFD5B0, mass: 1, size: [1, 3, 1], y: 10 },
+            { name: 'arm_r', geo: new THREE.CylinderGeometry(1, 0.8, 6, 4), color: 0xFFD5B0, mass: 1, size: [1, 3, 1], y: 10 },
+            { name: 'leg_l', geo: new THREE.CylinderGeometry(1.1, 0.9, 7, 4), color: 0x3E2723, mass: 1.5, size: [1.1, 3.5, 1.1], y: 3 },
+            { name: 'leg_r', geo: new THREE.CylinderGeometry(1.1, 0.9, 7, 4), color: 0x3E2723, mass: 1.5, size: [1.1, 3.5, 1.1], y: 3 },
+        ];
+
+        // Scale for bosses
+        const scale = enemy.def.isBoss ? 2 : 1;
+
+        // Hit impulse direction based on swing
+        const impulseForce = enemy.def.isBoss ? 80 : 40;
+        const upForce = swingDir === 'overhead' ? impulseForce * 1.5 : impulseForce * 0.5;
+
+        partDefs.forEach((def, i) => {
+            const mat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.7 });
+            const mesh = new THREE.Mesh(def.geo, mat);
+            mesh.scale.setScalar(scale);
+            mesh.position.set(
+                pos.x + (Math.random() - 0.5) * 3,
+                def.y * scale,
+                pos.z + (Math.random() - 0.5) * 3
+            );
+            mesh.castShadow = true;
+            this.scene.add(mesh);
+
+            // Cannon body
+            let shape;
+            if (def.name === 'head') {
+                shape = new CANNON.Sphere(def.size[0] * scale);
+            } else {
+                shape = new CANNON.Box(new CANNON.Vec3(
+                    (def.size[0] || 1) * scale,
+                    (def.size[1] || 1) * scale,
+                    (def.size[2] || 1) * scale
+                ));
+            }
+
+            const body = new CANNON.Body({
+                mass: def.mass,
+                shape,
+                material: this.ragdollMaterial,
+                position: new CANNON.Vec3(mesh.position.x, mesh.position.y, mesh.position.z),
+                linearDamping: 0.3,
+                angularDamping: 0.3
+            });
+
+            // Apply impulse from hit direction
+            const spreadX = (Math.random() - 0.5) * 20;
+            const spreadZ = (Math.random() - 0.5) * 20;
+            body.applyImpulse(
+                new CANNON.Vec3(
+                    Math.sin(hitAngle) * impulseForce + spreadX,
+                    upForce + Math.random() * 20,
+                    Math.cos(hitAngle) * impulseForce + spreadZ
+                )
+            );
+            // Random spin
+            body.angularVelocity.set(
+                (Math.random() - 0.5) * 15,
+                (Math.random() - 0.5) * 15,
+                (Math.random() - 0.5) * 15
+            );
+
+            this.physicsWorld.addBody(body);
+            parts.push({ mesh, body, born: performance.now() });
+        });
+
+        this.ragdollParts.push(...parts);
+    }
+
+    _updatePhysics(dt) {
+        // Step physics world
+        this.physicsWorld.step(1 / 60, dt, 3);
+
+        // Sync ragdoll meshes with physics bodies
+        for (let i = this.ragdollParts.length - 1; i >= 0; i--) {
+            const part = this.ragdollParts[i];
+            const age = (performance.now() - part.born) / 1000;
+
+            // Sync position and rotation
+            part.mesh.position.copy(part.body.position);
+            part.mesh.quaternion.copy(part.body.quaternion);
+
+            // Fade out after 3 seconds
+            if (age > 3) {
+                part.mesh.material.transparent = true;
+                part.mesh.material.opacity = Math.max(0, 1 - (age - 3) / 2);
+            }
+
+            // Remove after 5 seconds
+            if (age > 5) {
+                this.scene.remove(part.mesh);
+                this.physicsWorld.removeBody(part.body);
+                part.mesh.geometry.dispose();
+                part.mesh.material.dispose();
+                this.ragdollParts.splice(i, 1);
+            }
+        }
     }
 
     // =================== WORLD ===================
@@ -895,11 +1026,13 @@ export class Game3D {
                 const d = Math.hypot(e.model.position.x - sx, e.model.position.z - sz);
                 const hitRange = e.def.isBoss ? 40 : 25;
                 if (d < hitRange) {
-                    this._dmg(e, dmg);
-                    // Knockback
+                    this._dmg(e, dmg, angle, swingDir);
+                    // Physics-based knockback
                     const kbForce = swingDir === 'overhead' ? 8 : swingDir === 'thrust' ? 12 : 6;
                     e.model.position.x += Math.sin(angle) * kbForce;
                     e.model.position.z += Math.cos(angle) * kbForce;
+                    // Stagger effect - brief pause for enemy
+                    e.lastAtk = performance.now() + 300;
                     // Hit impact effect
                     this._hitImpact(e.model.position, swingDir);
                 }
@@ -953,9 +1086,11 @@ export class Game3D {
         });
     }
 
-    _dmg(enemy, amount) {
+    _dmg(enemy, amount, hitAngle, swingDir) {
         if (!enemy.alive) return;
         enemy.hp -= amount;
+        enemy._lastHitAngle = hitAngle || 0;
+        enemy._lastSwingDir = swingDir || 'right';
         this._flashMob(enemy);
         this._floatDmg(enemy.model.position, amount, '#FFD700');
         broadcastMobHit({ mobId: enemy.def.id, dmg: amount });
@@ -968,15 +1103,13 @@ export class Game3D {
 
     _killMob(enemy, isLocal) {
         enemy.alive = false;
-        const start = performance.now();
         const pos = enemy.model.position.clone();
-        const anim = () => {
-            const t = (performance.now() - start) / 500;
-            if (t >= 1) { this.scene.remove(enemy.model); return; }
-            enemy.model.scale.set(1 - t, 1 - t, 1 - t);
-            enemy.model.position.y = -t * 5;
-            requestAnimationFrame(anim);
-        }; anim();
+
+        // Spawn ragdoll with physics!
+        this._createRagdoll(enemy, enemy._lastHitAngle || 0, enemy._lastSwingDir || 'right');
+
+        // Remove original model immediately
+        this.scene.remove(enemy.model);
 
         if (isLocal) {
             this.user.xp = (this.user.xp || 0) + enemy.def.xp;
@@ -1177,6 +1310,7 @@ export class Game3D {
         this._updatePlayer(dt);
         this._updateEnemyAI(dt);
         this._updateProj(dt);
+        this._updatePhysics(dt);
         this._updateAmbient(time, dt);
         this._updateCam();
 
