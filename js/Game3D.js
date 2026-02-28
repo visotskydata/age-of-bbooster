@@ -334,56 +334,180 @@ export class Game3D {
     _charModel(cls) {
         const g = new THREE.Group();
         const clr = CLASS_COLORS[cls] || 0xFFFFFF;
+        const skinColor = 0xFFD5B0;
 
-        // Body
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(4, 3.5, 12, 8), new THREE.MeshStandardMaterial({ color: clr }));
-        body.position.y = 6; body.castShadow = true; g.add(body);
+        // === BODY PARTS (segmented for hit zones & dismemberment) ===
+
+        // Torso
+        const torso = new THREE.Mesh(
+            new THREE.CylinderGeometry(4, 3.5, 10, 8),
+            new THREE.MeshStandardMaterial({ color: clr, roughness: 0.7 })
+        );
+        torso.position.y = 8; torso.castShadow = true;
+        torso.userData.bodyPart = 'torso';
+        g.add(torso);
 
         // Head
-        const head = new THREE.Mesh(new THREE.SphereGeometry(3.5, 8, 6), new THREE.MeshStandardMaterial({ color: 0xFFD5B0 }));
-        head.position.y = 15; head.castShadow = true; g.add(head);
+        const head = new THREE.Mesh(
+            new THREE.SphereGeometry(3.2, 8, 6),
+            new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.6 })
+        );
+        head.position.y = 16; head.castShadow = true;
+        head.userData.bodyPart = 'head';
+        g.add(head);
 
         // Eyes
         [-1.3, 1.3].forEach(ox => {
             const eye = new THREE.Mesh(new THREE.SphereGeometry(0.5, 4, 4), new THREE.MeshBasicMaterial({ color: 0x111111 }));
-            eye.position.set(ox, 15.5, 3); g.add(eye);
+            eye.position.set(ox, 16.2, 2.8);
+            head.add(eye);
         });
 
+        // Left Arm
+        const leftArm = new THREE.Mesh(
+            new THREE.CylinderGeometry(1.2, 1, 8, 6),
+            new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.6 })
+        );
+        leftArm.position.set(-5.5, 9, 0);
+        leftArm.rotation.z = 0.2;
+        leftArm.castShadow = true;
+        leftArm.userData.bodyPart = 'arm_left';
+        g.add(leftArm);
+
+        // Right Arm (weapon arm) — on a pivot for swing animation
+        const rightArmPivot = new THREE.Group();
+        rightArmPivot.position.set(5.5, 12, 0);
+        rightArmPivot.userData.isWeaponArm = true;
+        g.add(rightArmPivot);
+
+        const rightArm = new THREE.Mesh(
+            new THREE.CylinderGeometry(1.2, 1, 8, 6),
+            new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.6 })
+        );
+        rightArm.position.y = -3;
+        rightArm.castShadow = true;
+        rightArm.userData.bodyPart = 'arm_right';
+        rightArmPivot.add(rightArm);
+
+        // Left Leg
+        const leftLeg = new THREE.Mesh(
+            new THREE.CylinderGeometry(1.3, 1.1, 8, 6),
+            new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.8 })
+        );
+        leftLeg.position.set(-2, 1.5, 0);
+        leftLeg.castShadow = true;
+        leftLeg.userData.bodyPart = 'leg_left';
+        g.add(leftLeg);
+
+        // Right Leg
+        const rightLeg = new THREE.Mesh(
+            new THREE.CylinderGeometry(1.3, 1.1, 8, 6),
+            new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.8 })
+        );
+        rightLeg.position.set(2, 1.5, 0);
+        rightLeg.castShadow = true;
+        rightLeg.userData.bodyPart = 'leg_right';
+        g.add(rightLeg);
+
+        // === CLASS-SPECIFIC EQUIPMENT ===
         if (cls === 'warrior') {
             // Helmet
-            const helmet = new THREE.Mesh(new THREE.SphereGeometry(4, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x777777, metalness: 0.8 }));
-            helmet.position.y = 16; g.add(helmet);
-            // Shield
-            const shield = new THREE.Mesh(new THREE.CircleGeometry(4, 6), new THREE.MeshStandardMaterial({ color: 0x888888, side: THREE.DoubleSide }));
-            shield.position.set(-5, 8, 0); shield.rotation.y = Math.PI / 2; g.add(shield);
-            // Sword
-            const sword = new THREE.Mesh(new THREE.BoxGeometry(1, 12, 0.5), new THREE.MeshStandardMaterial({ color: 0xCCCCCC }));
-            sword.position.set(5, 10, 0); g.add(sword);
+            const helmet = new THREE.Mesh(
+                new THREE.SphereGeometry(3.8, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2),
+                new THREE.MeshStandardMaterial({ color: 0x777777, metalness: 0.8, roughness: 0.3 })
+            );
+            helmet.position.y = 16.5; g.add(helmet);
+
+            // Shield on left arm
+            const shield = new THREE.Mesh(
+                new THREE.BoxGeometry(1, 8, 6),
+                new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.6, roughness: 0.4 })
+            );
+            shield.position.set(-7, 9, 0);
+            shield.userData.bodyPart = 'shield';
+            g.add(shield);
+
+            // Sword on weapon arm pivot
+            const sword = new THREE.Mesh(
+                new THREE.BoxGeometry(0.8, 14, 0.4),
+                new THREE.MeshStandardMaterial({ color: 0xCCCCCC, metalness: 0.9, roughness: 0.2 })
+            );
+            sword.position.y = -10;
+            sword.userData.isWeapon = true;
+            sword.userData.weaponType = 'sword';
+            rightArmPivot.add(sword);
+
+            // Sword guard
+            const guard = new THREE.Mesh(
+                new THREE.BoxGeometry(3, 0.6, 1.5),
+                new THREE.MeshStandardMaterial({ color: 0x8D6E63, metalness: 0.5 })
+            );
+            guard.position.y = -3.5;
+            rightArmPivot.add(guard);
+
         } else if (cls === 'mage') {
             // Hat
-            const hat = new THREE.Mesh(new THREE.ConeGeometry(4.5, 10, 6), new THREE.MeshStandardMaterial({ color: 0x1A237E }));
+            const hat = new THREE.Mesh(
+                new THREE.ConeGeometry(4.5, 10, 6),
+                new THREE.MeshStandardMaterial({ color: 0x1A237E, roughness: 0.7 })
+            );
             hat.position.y = 22; g.add(hat);
-            // Staff
-            const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 22, 6), new THREE.MeshStandardMaterial({ color: 0x5D4037 }));
-            staff.position.set(5, 11, 0); g.add(staff);
-            // Orb
-            const orb = new THREE.Mesh(new THREE.SphereGeometry(2, 8, 8), new THREE.MeshStandardMaterial({ color: 0xE040FB, emissive: 0xE040FB, emissiveIntensity: 0.8 }));
-            orb.position.set(5, 23, 0); g.add(orb);
+
+            // Staff on weapon arm
+            const staff = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.5, 0.5, 24, 6),
+                new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.8 })
+            );
+            staff.position.y = -8;
+            staff.userData.isWeapon = true;
+            staff.userData.weaponType = 'staff';
+            rightArmPivot.add(staff);
+
+            // Orb on top of staff
+            const orb = new THREE.Mesh(
+                new THREE.SphereGeometry(2, 8, 8),
+                new THREE.MeshStandardMaterial({ color: 0xE040FB, emissive: 0xE040FB, emissiveIntensity: 0.8 })
+            );
+            orb.position.y = -20;
+            rightArmPivot.add(orb);
+
         } else {
             // Hood
-            const hood = new THREE.Mesh(new THREE.ConeGeometry(4, 6, 6), new THREE.MeshStandardMaterial({ color: 0x2E7D32 }));
+            const hood = new THREE.Mesh(
+                new THREE.ConeGeometry(4, 6, 6),
+                new THREE.MeshStandardMaterial({ color: 0x2E7D32, roughness: 0.7 })
+            );
             hood.position.y = 19; g.add(hood);
-            // Bow
-            const bow = new THREE.Mesh(new THREE.TorusGeometry(5, 0.4, 4, 8, Math.PI), new THREE.MeshStandardMaterial({ color: 0x6D4C41 }));
-            bow.position.set(-5, 10, 0); bow.rotation.z = Math.PI / 2; g.add(bow);
-            // Quiver
-            const quiver = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 10, 6), new THREE.MeshStandardMaterial({ color: 0x5D4037 }));
+
+            // Bow on weapon arm
+            const bow = new THREE.Mesh(
+                new THREE.TorusGeometry(5, 0.4, 4, 8, Math.PI),
+                new THREE.MeshStandardMaterial({ color: 0x6D4C41, roughness: 0.8 })
+            );
+            bow.position.y = -3;
+            bow.rotation.z = Math.PI / 2;
+            bow.userData.isWeapon = true;
+            bow.userData.weaponType = 'bow';
+            rightArmPivot.add(bow);
+
+            // Quiver on back
+            const quiver = new THREE.Mesh(
+                new THREE.CylinderGeometry(1.5, 1.5, 10, 6),
+                new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.8 })
+            );
             quiver.position.set(0, 10, -3); g.add(quiver);
         }
 
         // Shadow disc
-        const shadow = new THREE.Mesh(new THREE.CircleGeometry(5, 8), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.2 }));
+        const shadow = new THREE.Mesh(
+            new THREE.CircleGeometry(5, 8),
+            new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.2 })
+        );
         shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.2; g.add(shadow);
+
+        // Store refs for animation
+        g.userData.parts = { torso, head, leftArm, rightArmPivot, leftLeg, rightLeg };
+        g.userData.swingState = { active: false, time: 0, direction: 'right', combo: 0 };
 
         return g;
     }
@@ -536,17 +660,33 @@ export class Game3D {
         document.addEventListener('keydown', e => { this.keys[e.code] = true; });
         document.addEventListener('keyup', e => { this.keys[e.code] = false; });
 
+        // Mouse tracking for directional swings
+        this.mouseVelocity = { x: 0, y: 0 };
+        this.lastMousePos = { x: 0, y: 0 };
+        this.isBlocking = false;
+
         this.renderer.domElement.addEventListener('mousemove', e => {
             const rect = this.renderer.domElement.getBoundingClientRect();
             this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            // Track mouse velocity for swing direction
+            this.mouseVelocity.x = e.clientX - this.lastMousePos.x;
+            this.mouseVelocity.y = e.clientY - this.lastMousePos.y;
+            this.lastMousePos.x = e.clientX;
+            this.lastMousePos.y = e.clientY;
         });
 
         this.renderer.domElement.addEventListener('mousedown', e => {
             if (e.button === 0) this._attack();
+            if (e.button === 2) this._startBlock();
         });
 
-        this.renderer.domElement.addEventListener('keydown-e', () => { });
+        this.renderer.domElement.addEventListener('mouseup', e => {
+            if (e.button === 2) this._endBlock();
+        });
+
+        this.renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+
         document.addEventListener('keydown', e => {
             if (e.code === 'KeyE') this._interact();
         });
@@ -563,51 +703,236 @@ export class Game3D {
     }
 
     // =================== COMBAT ===================
+    _getSwingDirection() {
+        const vx = this.mouseVelocity?.x || 0;
+        const vy = this.mouseVelocity?.y || 0;
+        const absX = Math.abs(vx), absY = Math.abs(vy);
+        if (absX < 3 && absY < 3) return 'thrust'; // Small movement = thrust
+        if (absY > absX && vy < 0) return 'overhead'; // Mouse up = overhead
+        if (vx > 0) return 'right';
+        return 'left';
+    }
+
     _attack() {
         const now = performance.now();
         const cls = this.user.class || 'warrior';
         const cd = CLASS_ATK_CD[cls] || 600;
         if (now - this.lastAtk < cd) return;
+        if (this.isBlocking) return;
         this.lastAtk = now;
 
         const target = this._getMouseWorldPos();
         if (!target) return;
         const pos = this.playerModel.position;
         const angle = Math.atan2(target.x - pos.x, target.z - pos.z);
-        const dmg = (this.user.attack || 10) + (CLASS_DMG[cls] || 10);
+        const baseDmg = (this.user.attack || 10) + (CLASS_DMG[cls] || 10);
+        const swingDir = this._getSwingDirection();
 
-        if (cls === 'warrior') this._melee(pos, angle, dmg, true);
-        else if (cls === 'archer') this._ranged(pos, angle, dmg, 0x8D6E63, 400, 2000, true);
-        else this._ranged(pos, angle, dmg, 0xE040FB, 300, 2500, true);
+        // Swing direction damage multipliers
+        const dirMult = { overhead: 1.5, thrust: 1.3, right: 1.0, left: 1.0 };
+        const dmg = Math.round(baseDmg * (dirMult[swingDir] || 1));
 
-        broadcastAttack({ playerId: this.user.id, cls, x: Math.round(pos.x), z: Math.round(pos.z), angle });
+        // Combo tracking
+        const state = this.playerModel.userData.swingState;
+        if (now - (state.lastSwingTime || 0) < 1200) {
+            state.combo = Math.min((state.combo || 0) + 1, 3);
+        } else {
+            state.combo = 0;
+        }
+        state.lastSwingTime = now;
+        const comboDmg = Math.round(dmg * (1 + state.combo * 0.15));
+
+        if (cls === 'warrior') {
+            this._swingWeapon(swingDir);
+            this._melee(pos, angle, comboDmg, true, swingDir);
+        } else if (cls === 'archer') {
+            this._swingWeapon('thrust');
+            this._ranged(pos, angle, comboDmg, 0x8D6E63, 400, 2000, true);
+        } else {
+            this._swingWeapon('thrust');
+            this._ranged(pos, angle, comboDmg, 0xE040FB, 300, 2500, true);
+        }
+
+        // Show combo indicator
+        if (state.combo > 0) {
+            this._floatDmg(pos, `${state.combo + 1}x COMBO!`, '#FFD700');
+        }
+
+        broadcastAttack({ playerId: this.user.id, cls, x: Math.round(pos.x), z: Math.round(pos.z), angle, swingDir });
     }
 
-    _melee(pos, angle, dmg, isLocal) {
-        // Slash effect
+    _swingWeapon(direction) {
+        const parts = this.playerModel.userData.parts;
+        if (!parts) return;
+        const pivot = parts.rightArmPivot;
+        const state = this.playerModel.userData.swingState;
+        if (state.active) return;
+        state.active = true;
+        state.direction = direction;
+
+        const startTime = performance.now();
+        const duration = 250; // ms
+
+        // Swing arc based on direction
+        const arcs = {
+            right: { startZ: -0.8, endZ: 1.2, startX: -0.3, endX: 0.3 },
+            left: { startZ: 1.2, endZ: -0.8, startX: 0.3, endX: -0.3 },
+            overhead: { startZ: 0, endZ: 0, startX: -1.5, endX: 0.8 },
+            thrust: { startZ: 0, endZ: 0, startX: -0.3, endX: 0.6 },
+        };
+        const arc = arcs[direction] || arcs.right;
+
+        // Weapon trail
+        this._createWeaponTrail(direction);
+
+        const animate = () => {
+            const elapsed = performance.now() - startTime;
+            const t = Math.min(elapsed / duration, 1);
+            // Easing: fast start, slow end
+            const ease = 1 - Math.pow(1 - t, 3);
+
+            pivot.rotation.z = arc.startZ + (arc.endZ - arc.startZ) * ease;
+            pivot.rotation.x = arc.startX + (arc.endX - arc.startX) * ease;
+
+            if (t < 1) {
+                requestAnimationFrame(animate);
+            } else {
+                // Return to idle
+                const returnStart = performance.now();
+                const returnDur = 200;
+                const endZ = pivot.rotation.z, endX = pivot.rotation.x;
+                const returnAnim = () => {
+                    const rt = Math.min((performance.now() - returnStart) / returnDur, 1);
+                    pivot.rotation.z = endZ * (1 - rt);
+                    pivot.rotation.x = endX * (1 - rt);
+                    if (rt < 1) requestAnimationFrame(returnAnim);
+                    else state.active = false;
+                };
+                returnAnim();
+            }
+        };
+        animate();
+    }
+
+    _createWeaponTrail(direction) {
+        const trailGeo = new THREE.PlaneGeometry(2, 14);
+        const trailMat = new THREE.MeshBasicMaterial({
+            color: 0xFFFFFF, transparent: true, opacity: 0.6,
+            side: THREE.DoubleSide, blending: THREE.AdditiveBlending
+        });
+        const trail = new THREE.Mesh(trailGeo, trailMat);
+        const pos = this.playerModel.position;
+        const angle = this.playerModel.rotation.y;
+
+        trail.position.set(
+            pos.x + Math.sin(angle) * 10,
+            10,
+            pos.z + Math.cos(angle) * 10
+        );
+        trail.rotation.y = angle;
+        this.scene.add(trail);
+
+        const start = performance.now();
+        const animTrail = () => {
+            const t = (performance.now() - start) / 300;
+            if (t >= 1) { this.scene.remove(trail); return; }
+            trail.material.opacity = 0.6 * (1 - t);
+            trail.scale.x = 1 + t * 2;
+            trail.scale.y = 1 - t * 0.3;
+            requestAnimationFrame(animTrail);
+        };
+        animTrail();
+    }
+
+    _startBlock() {
+        this.isBlocking = true;
+        const parts = this.playerModel.userData.parts;
+        if (!parts) return;
+        // Raise left arm / shield
+        parts.leftArm.rotation.z = -1.2;
+        parts.leftArm.rotation.x = 0.5;
+    }
+
+    _endBlock() {
+        this.isBlocking = false;
+        const parts = this.playerModel.userData.parts;
+        if (!parts) return;
+        parts.leftArm.rotation.z = 0.2;
+        parts.leftArm.rotation.x = 0;
+    }
+
+    _melee(pos, angle, dmg, isLocal, swingDir) {
+        // Enhanced slash effect based on direction
+        const colors = { right: 0xFFFFFF, left: 0xFFFFFF, overhead: 0xFFDD44, thrust: 0x44DDFF };
+        const slashColor = colors[swingDir] || 0xFFFFFF;
+        const arcAngle = swingDir === 'thrust' ? Math.PI * 0.3 : Math.PI * 0.6;
+
         const slash = new THREE.Mesh(
-            new THREE.TorusGeometry(10, 2, 4, 8, Math.PI * 0.6),
-            new THREE.MeshBasicMaterial({ color: 0xFFFFFF, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
+            new THREE.TorusGeometry(12, 1.5, 4, 12, arcAngle),
+            new THREE.MeshBasicMaterial({ color: slashColor, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
         );
         slash.position.set(pos.x + Math.sin(angle) * 15, 8, pos.z + Math.cos(angle) * 15);
         slash.rotation.y = angle;
+        if (swingDir === 'overhead') slash.rotation.x = Math.PI / 2;
         this.scene.add(slash);
+
         const start = performance.now();
         const anim = () => {
-            const t = (performance.now() - start) / 250;
+            const t = (performance.now() - start) / 300;
             if (t >= 1) { this.scene.remove(slash); return; }
-            slash.scale.set(1 + t, 1 + t, 1 + t);
-            slash.material.opacity = 0.8 * (1 - t);
+            slash.scale.set(1 + t * 0.5, 1 + t * 0.5, 1 + t * 0.5);
+            slash.material.opacity = 0.9 * (1 - t);
+            if (swingDir !== 'thrust') slash.rotation.z += (swingDir === 'left' ? -0.15 : 0.15);
             requestAnimationFrame(anim);
-        }; anim();
+        };
+        anim();
 
         if (isLocal) {
-            const sx = pos.x + Math.sin(angle) * 15, sz = pos.z + Math.cos(angle) * 15;
+            const sx = pos.x + Math.sin(angle) * 15;
+            const sz = pos.z + Math.cos(angle) * 15;
             this.enemies.forEach(e => {
                 if (!e.alive) return;
                 const d = Math.hypot(e.model.position.x - sx, e.model.position.z - sz);
-                if (d < (e.def.isBoss ? 40 : 25)) this._dmg(e, dmg);
+                const hitRange = e.def.isBoss ? 40 : 25;
+                if (d < hitRange) {
+                    this._dmg(e, dmg);
+                    // Knockback
+                    const kbForce = swingDir === 'overhead' ? 8 : swingDir === 'thrust' ? 12 : 6;
+                    e.model.position.x += Math.sin(angle) * kbForce;
+                    e.model.position.z += Math.cos(angle) * kbForce;
+                    // Hit impact effect
+                    this._hitImpact(e.model.position, swingDir);
+                }
             });
+        }
+    }
+
+    _hitImpact(pos, swingDir) {
+        const count = 8;
+        const color = swingDir === 'overhead' ? 0xFFDD44 : 0xFF4400;
+        for (let i = 0; i < count; i++) {
+            const spark = new THREE.Mesh(
+                new THREE.SphereGeometry(0.5, 4, 4),
+                new THREE.MeshBasicMaterial({ color })
+            );
+            spark.position.copy(pos);
+            spark.position.y = 5 + Math.random() * 10;
+            this.scene.add(spark);
+            const vx = (Math.random() - 0.5) * 3;
+            const vy = Math.random() * 4;
+            const vz = (Math.random() - 0.5) * 3;
+            const born = performance.now();
+            const animSpark = () => {
+                const t = (performance.now() - born) / 400;
+                if (t >= 1) { this.scene.remove(spark); return; }
+                spark.position.x += vx;
+                spark.position.y += vy - t * 8;
+                spark.position.z += vz;
+                spark.material.opacity = 1 - t;
+                spark.scale.setScalar(1 - t * 0.5);
+                requestAnimationFrame(animSpark);
+            };
+            animSpark();
         }
     }
 
@@ -880,10 +1205,28 @@ export class Game3D {
             this.playerModel.rotation.y += (a - this.playerModel.rotation.y) * 0.15;
         }
 
-        // Walking bobble
-        if (vx || vz) {
-            this.playerModel.position.y = Math.sin(performance.now() * 0.01) * 1;
-        } else {
+        // Procedural walk animation
+        const parts = this.playerModel.userData.parts;
+        if (parts && (vx || vz)) {
+            const t = performance.now() * 0.008;
+            // Leg swing
+            parts.leftLeg.rotation.x = Math.sin(t) * 0.5;
+            parts.rightLeg.rotation.x = Math.sin(t + Math.PI) * 0.5;
+            // Arm swing (only left, right is weapon)
+            if (!this.isBlocking) {
+                parts.leftArm.rotation.x = Math.sin(t + Math.PI) * 0.4;
+            }
+            // Body bob
+            this.playerModel.position.y = Math.abs(Math.sin(t * 2)) * 0.8;
+            // Slight torso lean
+            parts.torso.rotation.x = 0.05;
+        } else if (parts) {
+            // Idle: return to rest + breathing
+            const breath = Math.sin(performance.now() * 0.003) * 0.02;
+            parts.leftLeg.rotation.x *= 0.85;
+            parts.rightLeg.rotation.x *= 0.85;
+            if (!this.isBlocking) parts.leftArm.rotation.x *= 0.85;
+            parts.torso.rotation.x = breath;
             this.playerModel.position.y *= 0.9;
         }
 
@@ -910,10 +1253,17 @@ export class Game3D {
                 // Melee
                 if (dist < (e.def.isBoss ? 40 : 20) && performance.now() - e.lastAtk > 1200) {
                     e.lastAtk = performance.now();
-                    const dmg = Math.max(1, e.def.atk - (this.user.defense || 5));
+                    let dmg = Math.max(1, e.def.atk - (this.user.defense || 5));
+                    // Block reduces damage
+                    if (this.isBlocking) {
+                        dmg = Math.round(dmg * 0.4);
+                        this._floatDmg(this.playerModel.position, 'BLOCKED', '#44AAFF');
+                        this.shakeIntensity = 1;
+                    } else {
+                        this.shakeIntensity = e.def.isBoss ? 8 : 4;
+                    }
                     this.user.hp = Math.max(0, (this.user.hp || 100) - dmg);
                     this._floatDmg(this.playerModel.position, dmg, '#FF4B4B');
-                    this.shakeIntensity = e.def.isBoss ? 8 : 4;
                     if (window.updateHUD) window.updateHUD();
                     if (this.user.hp <= 0) { this.user.hp = this.user.max_hp || 100; this.playerModel.position.set(1500, 0, 1500); this._showNotification('💀 Ты погиб!'); }
                 }
