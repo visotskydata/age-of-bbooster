@@ -13,12 +13,13 @@ document.getElementById('btn-login').addEventListener('click', async () => {
     if (!l || !p) return alert("Введите данные!");
 
     const btn = document.getElementById('btn-login');
-    btn.querySelector('span').textContent = '...';
+    const btnSpan = btn.querySelector('span');
+    if (btnSpan) btnSpan.textContent = '...';
     btn.disabled = true;
 
     const result = await dbLogin(l, p);
 
-    btn.querySelector('span').textContent = 'PLAY';
+    if (btnSpan) btnSpan.textContent = 'PLAY';
     btn.disabled = false;
 
     if (result.error) {
