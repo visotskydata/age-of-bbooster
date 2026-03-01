@@ -22,8 +22,8 @@ const PVP_RESPAWN_MS = 3500;
 const PVP_RESPAWN_PROTECTION_MS = 2500;
 const PVP_HIT_COOLDOWN_MS = 220;
 const PVP_DMG_SCALE = 0.85;
-const LOOK_DEADZONE = 52;
 const LOOK_SMOOTH_SPEED = 8;
+const LOOK_SENSITIVITY = 0.0022;
 const SYNC_INTERVAL_MS = 140;
 const REMOTE_POS_SMOOTH_SPEED = 10;
 const REMOTE_ROT_SMOOTH_SPEED = 14;
@@ -33,6 +33,7 @@ const TARGET_MODEL_HEIGHT = 20;
 const CLASS_TINT_STRENGTH = 0.16;
 const ARENA_CENTER = { x: 1500, z: 1500 };
 const ARENA_DUST_RADIUS = 560;
+const PLAYER_COLLIDER_RADIUS = 11;
 const MODEL_SOURCES = {
     warrior: {
         urls: [
@@ -74,6 +75,14 @@ const ARENA_SPAWNS = [
     { x: ARENA_CENTER.x + 150, z: ARENA_CENTER.z },
     { x: ARENA_CENTER.x, z: ARENA_CENTER.z - 150 },
     { x: ARENA_CENTER.x, z: ARENA_CENTER.z + 150 },
+];
+const ARENA_EXTRA_MOBS = [
+    { id: 'arena_wolf_0', type: 'wolf', x: 980, z: 1460, hp: 45, atk: 13, spd: 70, xp: 28, range: 260 },
+    { id: 'arena_wolf_1', type: 'wolf', x: 2050, z: 1480, hp: 45, atk: 13, spd: 70, xp: 28, range: 260 },
+    { id: 'arena_skel_0', type: 'skeleton', x: 1520, z: 930, hp: 60, atk: 12, spd: 52, xp: 30, range: 240 },
+    { id: 'arena_skel_1', type: 'skeleton', x: 1490, z: 2080, hp: 60, atk: 12, spd: 52, xp: 30, range: 240 },
+    { id: 'arena_mage_0', type: 'darkmage', x: 1100, z: 2030, hp: 75, atk: 16, spd: 45, xp: 42, range: 280 },
+    { id: 'arena_mage_1', type: 'darkmage', x: 1930, z: 980, hp: 75, atk: 16, spd: 45, xp: 42, range: 280 },
 ];
 
 // ========== FIXED MOB POSITIONS ==========
@@ -129,6 +138,9 @@ export class Game3D {
         this.syncInFlight = false;
         this.arenaTorches = [];
         this.arenaBanners = [];
+        this.arenaColliders = [];
+        this.mouseTurnDelta = 0;
+        this.lookYaw = 0;
 
         this._init();
         this._initPhysics();
@@ -138,7 +150,7 @@ export class Game3D {
 
         this._loadModels().then(() => {
             this._spawnPlayer();
-            if (!ARENA_MODE) this._spawnEnemies();
+            this._spawnEnemies();
             this._input();
             this._network();
             this._loop();
@@ -408,7 +420,48 @@ export class Game3D {
         let h = Math.sin(x * 0.008) * 3 + Math.cos(z * 0.008) * 3;
         if (x > 2000 && z < 900) h += Math.sin(x * 0.02) * 8 + Math.cos(z * 0.015) * 6; // mountains
         if (Math.hypot(x - 2500, z - 2500) < 350) h -= 3; // lake depression
+        if (ARENA_MODE) {
+            const d = Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z);
+            if (d < 640) {
+                const t = 1 - d / 640;
+                h = h * (1 - t) + (-0.4) * t;
+            }
+        }
         return h;
+    }
+
+    _getArenaFloorHeight(x, z) {
+        if (!ARENA_MODE) return -Infinity;
+        const d = Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z);
+        if (d <= 420) return 0.82;
+        if (d <= 560) return 0.42;
+        return -Infinity;
+    }
+
+    _resolveArenaCollision(x, z, radius = PLAYER_COLLIDER_RADIUS) {
+        if (!ARENA_MODE || !this.arenaColliders?.length) return { x, z };
+        let nx = x;
+        let nz = z;
+
+        for (let iter = 0; iter < 3; iter++) {
+            for (const collider of this.arenaColliders) {
+                const dx = nx - collider.x;
+                const dz = nz - collider.z;
+                const dist = Math.hypot(dx, dz) || 0.0001;
+                const minDist = (collider.r || 0) + radius;
+                if (dist >= minDist) continue;
+
+                const push = minDist - dist + 0.001;
+                nx += (dx / dist) * push;
+                nz += (dz / dist) * push;
+            }
+        }
+
+        return { x: nx, z: nz };
+    }
+
+    _addArenaCircleCollider(x, z, r) {
+        this.arenaColliders.push({ x, z, r });
     }
 
     // =================== WORLD ===================
@@ -456,6 +509,7 @@ export class Game3D {
 
         if (ARENA_MODE) {
             this._buildArena();
+            this._buildArenaOutskirts();
             return;
         }
 
@@ -508,6 +562,7 @@ export class Game3D {
         const cx = ARENA_CENTER.x, cz = ARENA_CENTER.z;
         this.arenaTorches = [];
         this.arenaBanners = [];
+        this.arenaColliders = [];
         const textureLoader = new THREE.TextureLoader();
         const anisotropy = this.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
         const floorMap = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.floorMap, 28, 28, true, anisotropy);
@@ -595,36 +650,61 @@ export class Game3D {
         ring.position.set(cx, 1.6, cz);
         ring.receiveShadow = true;
         this.scene.add(ring);
+        for (let i = 0; i < 40; i++) {
+            const a = (i / 40) * Math.PI * 2;
+            const gatePhase = Math.atan2(Math.sin(a * 2), Math.cos(a * 2));
+            if (Math.abs(gatePhase) < 0.19) continue;
+            this._addArenaCircleCollider(cx + Math.cos(a) * 430, cz + Math.sin(a) * 430, 13);
+        }
 
-        // Arena wall
-        const wall = new THREE.Mesh(
-            new THREE.CylinderGeometry(470, 470, 30, 72, 1, true),
-            new THREE.MeshStandardMaterial({
-                map: wallMap,
-                bumpMap: wallBump,
-                bumpScale: 0.7,
-                color: 0xd1ccc2,
-                roughness: 0.88,
-                metalness: 0.03,
-                side: THREE.DoubleSide,
-            })
-        );
-        wall.position.set(cx, 16, cz);
-        wall.receiveShadow = true;
-        this.scene.add(wall);
+        // Arena wall with gate openings to keep arena visually open.
+        const wallSegmentMaterial = new THREE.MeshStandardMaterial({
+            map: wallMap,
+            bumpMap: wallBump,
+            bumpScale: 0.7,
+            color: 0xd1ccc2,
+            roughness: 0.88,
+            metalness: 0.03,
+        });
+        const wallRadius = 470;
+        const segmentCount = 32;
+        const gateHalfWidth = 0.20;
 
-        const topLip = new THREE.Mesh(
-            new THREE.TorusGeometry(470, 3.2, 16, 96),
-            new THREE.MeshStandardMaterial({ color: 0x827568, roughness: 0.83, metalness: 0.06 })
-        );
-        topLip.rotation.x = Math.PI / 2;
-        topLip.position.set(cx, 31.5, cz);
-        topLip.receiveShadow = true;
-        this.scene.add(topLip);
+        for (let i = 0; i < segmentCount; i++) {
+            const a = (i / segmentCount) * Math.PI * 2;
+            const gatePhase = Math.atan2(Math.sin(a * 2), Math.cos(a * 2));
+            if (Math.abs(gatePhase) < gateHalfWidth) continue;
+
+            const seg = new THREE.Mesh(
+                new THREE.BoxGeometry(52, 30, 10),
+                wallSegmentMaterial
+            );
+            seg.position.set(cx + Math.cos(a) * wallRadius, 16, cz + Math.sin(a) * wallRadius);
+            seg.rotation.y = -a;
+            seg.castShadow = true;
+            seg.receiveShadow = true;
+            this.scene.add(seg);
+            this._addArenaCircleCollider(seg.position.x, seg.position.z, 18);
+        }
+
+        for (let i = 0; i < 4; i++) {
+            const a = (i / 4) * Math.PI * 2;
+            const gate = new THREE.Mesh(
+                new THREE.BoxGeometry(108, 16, 8),
+                new THREE.MeshStandardMaterial({ color: 0x978a79, roughness: 0.88, metalness: 0.04 })
+            );
+            gate.position.set(cx + Math.cos(a) * wallRadius, 34, cz + Math.sin(a) * wallRadius);
+            gate.rotation.y = -a;
+            gate.castShadow = true;
+            gate.receiveShadow = true;
+            this.scene.add(gate);
+        }
 
         // Columns
         for (let i = 0; i < 20; i++) {
             const a = (i / 20) * Math.PI * 2;
+            const gatePhase = Math.atan2(Math.sin(a * 2), Math.cos(a * 2));
+            if (Math.abs(gatePhase) < 0.17) continue;
             const x = cx + Math.cos(a) * 452;
             const z = cz + Math.sin(a) * 452;
             const col = new THREE.Mesh(
@@ -642,6 +722,7 @@ export class Game3D {
             col.castShadow = true;
             col.receiveShadow = true;
             this.scene.add(col);
+            this._addArenaCircleCollider(x, z, 8);
 
             const cap = new THREE.Mesh(
                 new THREE.CylinderGeometry(8.8, 8.8, 2.2, 12),
@@ -766,6 +847,45 @@ export class Game3D {
                 phase: Math.random() * Math.PI * 2,
                 baseIntensity: 1.25,
             });
+            this._addArenaCircleCollider(x, z, 9);
+        }
+    }
+
+    _buildArenaOutskirts() {
+        this._path([ARENA_CENTER.x - 430, ARENA_CENTER.z, 260, ARENA_CENTER.z], 28, 0x8B7355);
+        this._path([ARENA_CENTER.x + 430, ARENA_CENTER.z, 2740, ARENA_CENTER.z], 28, 0x8B7355);
+        this._path([ARENA_CENTER.x, ARENA_CENTER.z - 430, ARENA_CENTER.x, 260], 28, 0x8B7355);
+        this._path([ARENA_CENTER.x, ARENA_CENTER.z + 430, ARENA_CENTER.x, 2740], 28, 0x8B7355);
+
+        this._zoneOverlay(500, 500, 700, 600, 0x2f632a, 0.14);
+        this._zoneOverlay(2500, 500, 680, 560, 0x355c2d, 0.13);
+        this._zoneOverlay(500, 2480, 720, 640, 0x467430, 0.12);
+        this._zoneOverlay(2500, 2450, 700, 620, 0x3b6b31, 0.12);
+
+        this._scatterTrees(120, 2860, 120, 2860, 230, 0x2f6f31, 'pine');
+        this._scatterTrees(120, 2860, 120, 2860, 110, 0x4b8a39, 'oak');
+        this._scatterRocks(120, 2860, 120, 2860, 95);
+
+        [[420, 1460], [2580, 1520], [1500, 380], [1500, 2630], [760, 760], [2220, 2240]].forEach(([x, z]) => this._building(x, z));
+
+        for (let i = 0; i < 34; i++) {
+            const a = (i / 34) * Math.PI * 2;
+            const r = 1320 + Math.random() * 260;
+            const x = ARENA_CENTER.x + Math.cos(a) * r;
+            const z = ARENA_CENTER.z + Math.sin(a) * r;
+            const h = 80 + Math.random() * 170;
+            const ridge = new THREE.Mesh(
+                new THREE.ConeGeometry(80 + Math.random() * 110, h, 8),
+                new THREE.MeshStandardMaterial({ color: 0x6d675f, roughness: 0.94, metalness: 0.02 })
+            );
+            ridge.position.set(
+                Math.max(80, Math.min(MAP - 80, x)),
+                (h * 0.5) - 4,
+                Math.max(80, Math.min(MAP - 80, z))
+            );
+            ridge.castShadow = true;
+            ridge.receiveShadow = true;
+            this.scene.add(ridge);
         }
     }
 
@@ -828,6 +948,7 @@ export class Game3D {
             const z = zMin + Math.random() * (zMax - zMin);
             if (x > 1300 && x < 1700 && z > 1300 && z < 1700) continue;
             if (Math.hypot(x - 2500, z - 2500) < 280) continue;
+            if (ARENA_MODE && Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z) < 690) continue;
             this._tree(x, z, type, color);
         }
     }
@@ -836,6 +957,7 @@ export class Game3D {
         for (let i = 0; i < count; i++) {
             const x = xMin + Math.random() * (xMax - xMin);
             const z = zMin + Math.random() * (zMax - zMin);
+            if (ARENA_MODE && Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z) < 690) continue;
             const s = 4 + Math.random() * 8;
             const rock = new THREE.Mesh(
                 new THREE.DodecahedronGeometry(s, 0),
@@ -1176,6 +1298,7 @@ export class Game3D {
         this.playerModel.position.set(startX, this._getPlayerGroundTargetY(startX, startZ), startZ);
         this.scene.add(this.playerModel);
         this.playerSpeed = CLASS_SPEED[cls] || 140;
+        this.lookYaw = this.playerModel.rotation.y;
 
         // HP bar (world-space)
         this.hpBar = this._createHPBar(36);
@@ -1206,7 +1329,9 @@ export class Game3D {
     }
 
     _getPlayerGroundTargetY(x, z) {
-        return this._getTerrainHeight(x, z) + (this.playerGroundOffset || 0);
+        const terrainY = this._getTerrainHeight(x, z);
+        const arenaY = this._getArenaFloorHeight(x, z);
+        return Math.max(terrainY, arenaY) + (this.playerGroundOffset || 0);
     }
 
     _createHPBar(w) {
@@ -1240,12 +1365,20 @@ export class Game3D {
 
     // =================== ENEMIES ===================
     _spawnEnemies() {
-        MOBS.forEach(def => this._spawnMob(def));
+        const defs = ARENA_MODE ? [...MOBS, ...ARENA_EXTRA_MOBS] : MOBS;
+        defs.forEach(def => this._spawnMob(def));
     }
 
     _spawnMob(def) {
         const model = this._mobModel(def.type, def.isBoss);
-        model.position.set(def.x, 0, def.z);
+        this._tuneMobAppearance(model, def.type, def.isBoss);
+        if (!def.isBoss) {
+            const jitter = 0.92 + Math.random() * 0.22;
+            model.scale.multiplyScalar(jitter);
+        }
+        const groundOffset = this._computeModelGroundOffset(model);
+        model.userData.groundOffset = groundOffset;
+        model.position.set(def.x, Math.max(this._getTerrainHeight(def.x, def.z), this._getArenaFloorHeight(def.x, def.z)) + groundOffset, def.z);
         this.scene.add(model);
 
         const hp = this._createHPBar(def.isBoss ? 60 : 28);
@@ -1269,6 +1402,29 @@ export class Game3D {
         });
     }
 
+    _tuneMobAppearance(model, type, isBoss) {
+        const tint = new THREE.Color(MOB_COLORS[type] || 0xaaaaaa);
+        model.traverse((node) => {
+            if (!node.isMesh || !node.material) return;
+            const apply = (material) => {
+                const m = material.clone();
+                if (m.color) m.color.lerp(tint, isBoss ? 0.24 : 0.15);
+                m.roughness = Math.min(0.94, Math.max(0.25, m.roughness ?? 0.7));
+                m.metalness = Math.min(0.22, Math.max(0.0, m.metalness ?? 0.04));
+                if (m.emissive) {
+                    m.emissive.lerp(tint, isBoss ? 0.2 : 0.08);
+                    m.emissiveIntensity = Math.max(m.emissiveIntensity ?? 0, isBoss ? 0.22 : 0.08);
+                }
+                return m;
+            };
+            node.material = Array.isArray(node.material)
+                ? node.material.map(apply)
+                : apply(node.material);
+            node.castShadow = true;
+            node.receiveShadow = true;
+        });
+    }
+
     // =================== INPUT ===================
     _input() {
         document.addEventListener('keydown', e => { this.keys[e.code] = true; });
@@ -1276,16 +1432,19 @@ export class Game3D {
 
         // Mouse tracking for directional swings
         this.mouseVelocity = { x: 0, y: 0 };
-        this.lastMousePos = { x: 0, y: 0 };
+        this.lastMousePos = { x: null, y: null };
         this.isBlocking = false;
 
         this.renderer.domElement.addEventListener('mousemove', e => {
             const rect = this.renderer.domElement.getBoundingClientRect();
             this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-            // Track mouse velocity for swing direction
-            this.mouseVelocity.x = e.clientX - this.lastMousePos.x;
-            this.mouseVelocity.y = e.clientY - this.lastMousePos.y;
+            const hasLast = this.lastMousePos.x !== null && this.lastMousePos.y !== null;
+            const dx = hasLast ? (e.movementX || (e.clientX - this.lastMousePos.x)) : 0;
+            const dy = hasLast ? (e.movementY || (e.clientY - this.lastMousePos.y)) : 0;
+            this.mouseVelocity.x = dx;
+            this.mouseVelocity.y = dy;
+            this.mouseTurnDelta += dx;
             this.lastMousePos.x = e.clientX;
             this.lastMousePos.y = e.clientY;
         });
@@ -1293,6 +1452,9 @@ export class Game3D {
         this.renderer.domElement.addEventListener('mousedown', e => {
             if (e.button === 0) this._attack();
             if (e.button === 2) this._startBlock();
+            if (document.pointerLockElement !== this.renderer.domElement) {
+                this.renderer.domElement.requestPointerLock?.();
+            }
         });
 
         this.renderer.domElement.addEventListener('mouseup', e => {
@@ -1306,17 +1468,6 @@ export class Game3D {
         });
 
         this.renderer.domElement.style.cursor = 'crosshair';
-    }
-
-    _getMouseWorldPos() {
-        this.raycaster.setFromCamera(this.mouse, this.camera);
-        const playerGroundY = this.playerModel
-            ? (this.playerModel.position.y - (this.playerGroundOffset || 0))
-            : 0;
-        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -playerGroundY);
-        const target = new THREE.Vector3();
-        this.raycaster.ray.intersectPlane(plane, target);
-        return target;
     }
 
     // =================== COMBAT ===================
@@ -1339,10 +1490,8 @@ export class Game3D {
         if (this.isBlocking) return;
         this.lastAtk = now;
 
-        const target = this._getMouseWorldPos();
-        if (!target) return;
         const pos = this.playerModel.position;
-        const angle = Math.atan2(target.x - pos.x, target.z - pos.z);
+        const angle = this.playerModel.rotation.y;
         const baseDmg = (this.user.attack || 10) + (CLASS_DMG[cls] || 10);
         const swingDir = this._getSwingDirection();
 
@@ -1902,6 +2051,7 @@ export class Game3D {
         this.playerModel.position.y = this._getPlayerGroundTargetY(spawn.x, spawn.z);
         this.user.x = Math.round(spawn.x);
         this.user.y = Math.round(spawn.z);
+        this.lookYaw = this.playerModel.rotation.y;
         this.user.hp = this.user.max_hp || 100;
         this.user.velocityY = 0;
         this.user.isJumping = false;
@@ -1949,7 +2099,11 @@ export class Game3D {
             enemy.hp = enemy.maxHp;
             enemy.alive = true;
             enemy.model.scale.set(1, 1, 1);
-            enemy.model.position.set(enemy.def.x, 0, enemy.def.z);
+            enemy.model.position.set(
+                enemy.def.x,
+                Math.max(this._getTerrainHeight(enemy.def.x, enemy.def.z), this._getArenaFloorHeight(enemy.def.x, enemy.def.z)) + (enemy.model.userData.groundOffset || 0),
+                enemy.def.z
+            );
             this.scene.add(enemy.model);
         }, enemy.def.isBoss ? 60000 : 15000);
     }
@@ -2066,7 +2220,7 @@ export class Game3D {
 
     // =================== INTERACT ===================
     _interact() {
-        this._showNotification('⚔️ Arena PvP: бей онлайн-игроков в радиусе удара.');
+        this._showNotification('⚔️ Арена открыта: PvP с игроками и PvE с мобами за пределами ринга.');
     }
 
     // =================== NETWORK ===================
@@ -2116,7 +2270,7 @@ export class Game3D {
             remote.defense = p.defense;
             remote.targetX = p.x;
             remote.targetZ = p.y;
-            remote.targetY = this._getTerrainHeight(p.x, p.y);
+            remote.targetY = Math.max(this._getTerrainHeight(p.x, p.y), this._getArenaFloorHeight(p.x, p.y));
             if (typeof remote.lastServerX === 'number' && typeof remote.lastServerZ === 'number') {
                 const mdx = p.x - remote.lastServerX;
                 const mdz = p.y - remote.lastServerZ;
@@ -2136,7 +2290,11 @@ export class Game3D {
             } else {
                 const m = this._charModel(p.class || 'warrior');
                 m.userData.groundOffset = this._computeModelGroundOffset(m);
-                m.position.set(p.x, this._getTerrainHeight(p.x, p.y) + (m.userData.groundOffset || 0), p.y);
+                m.position.set(
+                    p.x,
+                    Math.max(this._getTerrainHeight(p.x, p.y), this._getArenaFloorHeight(p.x, p.y)) + (m.userData.groundOffset || 0),
+                    p.y
+                );
                 if (typeof remote.targetYaw === 'number') m.rotation.y = remote.targetYaw;
                 this._createLabel(p.login, m);
                 this.scene.add(m);
@@ -2413,17 +2571,13 @@ export class Game3D {
         if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis -= 1;
         if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis += 1;
 
-        // Mouse controls look direction.
-        const target = this._getMouseWorldPos();
-        if (target) {
-            const dx = target.x - this.playerModel.position.x;
-            const dz = target.z - this.playerModel.position.z;
-            if (Math.hypot(dx, dz) > LOOK_DEADZONE) {
-                const desiredYaw = Math.atan2(dx, dz);
-                const turnT = 1 - Math.exp(-LOOK_SMOOTH_SPEED * dt);
-                this.playerModel.rotation.y = this._lerpAngle(this.playerModel.rotation.y, desiredYaw, turnT);
-            }
+        if (!Number.isFinite(this.lookYaw)) this.lookYaw = this.playerModel.rotation.y;
+        if (Math.abs(this.mouseTurnDelta) > 0.0001) {
+            this.lookYaw += this.mouseTurnDelta * LOOK_SENSITIVITY;
+            this.mouseTurnDelta = 0;
         }
+        const turnT = 1 - Math.exp(-LOOK_SMOOTH_SPEED * dt);
+        this.playerModel.rotation.y = this._lerpAngle(this.playerModel.rotation.y, this.lookYaw, turnT);
 
         let moveX = 0;
         let moveZ = 0;
@@ -2431,8 +2585,8 @@ export class Game3D {
             const rot = this.playerModel.rotation.y;
             const forwardX = Math.sin(rot);
             const forwardZ = Math.cos(rot);
-            const rightX = Math.cos(rot);
-            const rightZ = -Math.sin(rot);
+            const rightX = Math.sin(rot + Math.PI * 0.5);
+            const rightZ = Math.cos(rot + Math.PI * 0.5);
 
             moveX = (forwardX * forwardAxis) + (rightX * strafeAxis);
             moveZ = (forwardZ * forwardAxis) + (rightZ * strafeAxis);
@@ -2442,8 +2596,15 @@ export class Game3D {
 
             isMoving = true;
             const spd = this.playerSpeed * dt * (this.keys['ShiftLeft'] ? 1.5 : 1.0);
-            this.playerModel.position.x += moveX * spd;
-            this.playerModel.position.z += moveZ * spd;
+            const nextX = this.playerModel.position.x + moveX * spd;
+            const nextZ = this.playerModel.position.z + moveZ * spd;
+            const resolved = this._resolveArenaCollision(nextX, nextZ, PLAYER_COLLIDER_RADIUS);
+            this.playerModel.position.x = resolved.x;
+            this.playerModel.position.z = resolved.z;
+        } else if (ARENA_MODE) {
+            const resolved = this._resolveArenaCollision(this.playerModel.position.x, this.playerModel.position.z, PLAYER_COLLIDER_RADIUS);
+            this.playerModel.position.x = resolved.x;
+            this.playerModel.position.z = resolved.z;
         }
 
         // Boundary constraints
@@ -2494,7 +2655,6 @@ export class Game3D {
     }
 
     _updateEnemyAI(dt) {
-        if (ARENA_MODE) return;
         const px = this.playerModel.position.x, pz = this.playerModel.position.z;
         const now = performance.now();
 
@@ -2585,6 +2745,11 @@ export class Game3D {
                 }
                 e.attackAnim = Math.max(0, e.attackAnim - dt * 4);
             }
+
+            e.model.position.y = Math.max(
+                this._getTerrainHeight(e.model.position.x, e.model.position.z),
+                this._getArenaFloorHeight(e.model.position.x, e.model.position.z)
+            ) + (e.model.userData.groundOffset || 0);
 
             // HP bar
             const pct = e.hp / e.maxHp;
