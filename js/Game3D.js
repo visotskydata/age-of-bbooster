@@ -70,6 +70,10 @@ export class Game3D {
             this._input();
             this._network();
             this._loop();
+            console.log("Game started successfully!");
+        }).catch(err => {
+            console.error("Game Setup Error:", err);
+            alert("Game Setup Error: " + err.message + "\n" + err.stack);
         });
     }
 
@@ -95,7 +99,8 @@ export class Game3D {
 
     // =================== ENGINE ===================
     _init() {
-        const w = this.container.clientWidth, h = this.container.clientHeight;
+        const w = window.innerWidth || 1024;
+        const h = window.innerHeight || 768;
         this.scene = new THREE.Scene();
 
         // Gradient sky
@@ -1546,7 +1551,8 @@ export class Game3D {
         this._updateEnemyAI(dt);
         this._updateProj(dt);
         this._updateAmbient(time, dt);
-        this._updateCombatVisuals(dt);
+        this._updateCombatCamera(dt);
+        this._updateScreenEffects();
         this._updatePhysics(dt);
 
         // Third-Person Over-the-Shoulder Camera logic
@@ -1740,8 +1746,8 @@ export class Game3D {
 
     // Helper for GLTF mobs (Skeletons)
     _playGLBAnim(e, target) {
-        const ud = e.model.userData;
-        if (!ud.animations || !ud.mixer) return;
+        const ud = e.model ? e.model.userData : e.userData;
+        if (!ud || !ud.animations || !ud.mixer) return;
 
         // Don't interrupt attack until finished, unless it's over
         if (ud.currentActionName && ud.currentActionName.includes('attack') && target !== 'attack') {
