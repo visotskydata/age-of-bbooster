@@ -22,6 +22,13 @@ const PVP_RESPAWN_MS = 3500;
 const PVP_RESPAWN_PROTECTION_MS = 2500;
 const PVP_HIT_COOLDOWN_MS = 220;
 const PVP_DMG_SCALE = 0.85;
+const LOOK_DEADZONE = 35;
+const LOOK_SMOOTH_SPEED = 12;
+const SYNC_INTERVAL_MS = 140;
+const REMOTE_POS_SMOOTH_SPEED = 10;
+const REMOTE_ROT_SMOOTH_SPEED = 14;
+const REMOTE_TELEPORT_DIST = 220;
+const REMOTE_IDLE_SPEED = 25;
 const ARENA_SPAWNS = [
     { x: 1500, z: 1500 },
     { x: 1350, z: 1500 },
@@ -80,6 +87,7 @@ export class Game3D {
         this.pvpLastHitSentAt = {};
         this.processedHitIds = new Set();
         this.processedHitOrder = [];
+        this.syncInFlight = false;
 
         this._init();
         this._initPhysics();
@@ -150,8 +158,9 @@ export class Game3D {
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.physicallyCorrectLights = true;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 1.3;
+        this.renderer.toneMappingExposure = 1.2;
         this.container.appendChild(this.renderer.domElement);
 
         // Post-processing
@@ -370,6 +379,11 @@ export class Game3D {
         this.scene.add(ground);
         this.ground = ground;
 
+        if (ARENA_MODE) {
+            this._buildArena();
+            return;
+        }
+
         // Water (lake) — animated
         const waterGeo = new THREE.CircleGeometry(250, 48);
         waterGeo.rotateX(-Math.PI / 2);
@@ -413,6 +427,64 @@ export class Game3D {
         const sq = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0x8a8a7a, roughness: 0.9 }));
         sq.rotation.x = -Math.PI / 2; sq.position.set(1500, 0.3, 1500); sq.receiveShadow = true;
         this.scene.add(sq);
+    }
+
+    _buildArena() {
+        const cx = 1500, cz = 1500;
+
+        // Arena floor
+        const floor = new THREE.Mesh(
+            new THREE.CircleGeometry(420, 96),
+            new THREE.MeshStandardMaterial({ color: 0x7f7c75, roughness: 0.82, metalness: 0.06 })
+        );
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set(cx, 0.75, cz);
+        floor.receiveShadow = true;
+        this.scene.add(floor);
+
+        // Ring border
+        const ring = new THREE.Mesh(
+            new THREE.TorusGeometry(430, 8, 18, 96),
+            new THREE.MeshStandardMaterial({ color: 0x5c5248, roughness: 0.86, metalness: 0.04 })
+        );
+        ring.rotation.x = Math.PI / 2;
+        ring.position.set(cx, 1.6, cz);
+        ring.receiveShadow = true;
+        this.scene.add(ring);
+
+        // Arena wall
+        const wall = new THREE.Mesh(
+            new THREE.CylinderGeometry(470, 470, 30, 72, 1, true),
+            new THREE.MeshStandardMaterial({ color: 0x6d6a62, roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide })
+        );
+        wall.position.set(cx, 16, cz);
+        wall.receiveShadow = true;
+        this.scene.add(wall);
+
+        // Columns
+        for (let i = 0; i < 20; i++) {
+            const a = (i / 20) * Math.PI * 2;
+            const x = cx + Math.cos(a) * 452;
+            const z = cz + Math.sin(a) * 452;
+            const col = new THREE.Mesh(
+                new THREE.CylinderGeometry(6, 7, 34, 10),
+                new THREE.MeshStandardMaterial({ color: 0x8b857d, roughness: 0.88, metalness: 0.03 })
+            );
+            col.position.set(x, 17, z);
+            col.castShadow = true;
+            col.receiveShadow = true;
+            this.scene.add(col);
+        }
+
+        // Light accents
+        for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2;
+            const x = cx + Math.cos(a) * 360;
+            const z = cz + Math.sin(a) * 360;
+            const flame = new THREE.PointLight(0xffb74d, 1.2, 140, 2);
+            flame.position.set(x, 18, z);
+            this.scene.add(flame);
+        }
     }
 
     _zoneOverlay(cx, cz, w, h, color, opacity) {
@@ -542,6 +614,11 @@ export class Game3D {
                 if (child.isMesh) {
                     child.castShadow = true;
                     child.receiveShadow = true;
+                    if (child.material) {
+                        child.material.roughness = Math.min(0.85, Math.max(0.25, child.material.roughness ?? 0.6));
+                        child.material.metalness = Math.min(0.18, Math.max(0.0, child.material.metalness ?? 0.02));
+                        child.material.envMapIntensity = 1.1;
+                    }
                 }
             });
             g.add(model);
@@ -1585,6 +1662,35 @@ export class Game3D {
         return { x: (v.x + 1) / 2 * this.renderer.domElement.clientWidth, y: (-v.y + 1) / 2 * this.renderer.domElement.clientHeight };
     }
 
+    _lerpAngle(current, target, t) {
+        const delta = Math.atan2(Math.sin(target - current), Math.cos(target - current));
+        return current + delta * Math.max(0, Math.min(1, t));
+    }
+
+    _setCharacterAnim(model, animName) {
+        const ud = model?.userData;
+        if (!ud?.mixer || !ud?.animations) return;
+
+        let realAnimName = animName;
+        if (animName === 'run') realAnimName = 'running_a';
+        if (animName === 'walk') realAnimName = 'walking_a';
+        if (animName === 'jump') realAnimName = 'jump_full_short';
+
+        if (!ud.animations[realAnimName]) {
+            for (const key in ud.animations) {
+                if (key.includes(animName.replace('_', ''))) { realAnimName = key; break; }
+            }
+        }
+        if (!ud.animations[realAnimName] || ud.currentActionName === realAnimName) return;
+
+        const next = ud.mixer.clipAction(ud.animations[realAnimName]);
+        next.reset();
+        if (ud.currentAction) next.crossFadeFrom(ud.currentAction, 0.18, true);
+        next.play();
+        ud.currentAction = next;
+        ud.currentActionName = realAnimName;
+    }
+
     _showNotification(text) {
         const div = document.createElement('div');
         div.textContent = text;
@@ -1674,11 +1780,17 @@ export class Game3D {
     }
 
     async _sync() {
+        if (this.syncInFlight) return;
+        this.syncInFlight = true;
         this.user.x = Math.round(this.playerModel.position.x);
         this.user.y = Math.round(this.playerModel.position.z);
-        const players = await dbSync(this.user);
-        this._updateOthers(players);
-        if (window.updateHUD) window.updateHUD();
+        try {
+            const players = await dbSync(this.user);
+            this._updateOthers(players);
+            if (window.updateHUD) window.updateHUD();
+        } finally {
+            this.syncInFlight = false;
+        }
     }
 
     _updateOthers(players) {
@@ -1687,26 +1799,37 @@ export class Game3D {
             if (p.id === this.user.id) return;
             active.add(p.id);
             const prev = this.remotePlayers[p.id];
-            this.remotePlayers[p.id] = p;
+            const remote = this.remotePlayers[p.id] || {};
+            remote.id = p.id;
+            remote.login = p.login;
+            remote.class = p.class;
+            remote.hp = p.hp;
+            remote.max_hp = p.max_hp;
+            remote.defense = p.defense;
+            remote.targetX = p.x;
+            remote.targetZ = p.y;
+            remote.targetY = this._getTerrainHeight(p.x, p.y);
+            if (typeof remote.lastServerX === 'number' && typeof remote.lastServerZ === 'number') {
+                const mdx = p.x - remote.lastServerX;
+                const mdz = p.y - remote.lastServerZ;
+                if (Math.hypot(mdx, mdz) > 1) remote.targetYaw = Math.atan2(mdx, mdz);
+            }
+            remote.lastServerX = p.x;
+            remote.lastServerZ = p.y;
+            this.remotePlayers[p.id] = remote;
             if (!prev) {
                 this.remoteProtectedUntil[p.id] = performance.now() + 1000;
-            } else if ((prev.hp || 0) <= 0 && (p.hp || 0) > 0) {
+            } else if ((prev.hp || 0) <= 0 && (remote.hp || 0) > 0) {
                 this.remoteProtectedUntil[p.id] = performance.now() + PVP_RESPAWN_PROTECTION_MS;
             }
 
             if (this.others[p.id]) {
-                const m = this.others[p.id];
-                m.position.x += (p.x - m.position.x) * 0.1;
-                m.position.z += (p.y - m.position.z) * 0.1;
-                const remoteGroundOffset = m.userData.groundOffset || 0;
-                const ty = this._getTerrainHeight(p.x, p.y) + remoteGroundOffset;
-                m.position.y += (ty - m.position.y) * 0.2;
-                const a = Math.atan2(p.x - m.position.x, p.y - m.position.z);
-                if (Math.abs(a) > 0.01) m.rotation.y = a;
+                // Per-frame smoothing happens in _updateRemotePlayers().
             } else {
                 const m = this._charModel(p.class || 'warrior');
                 m.userData.groundOffset = this._computeModelGroundOffset(m);
                 m.position.set(p.x, this._getTerrainHeight(p.x, p.y) + (m.userData.groundOffset || 0), p.y);
+                if (typeof remote.targetYaw === 'number') m.rotation.y = remote.targetYaw;
                 this._createLabel(p.login, m);
                 this.scene.add(m);
                 this.others[p.id] = m;
@@ -1720,6 +1843,41 @@ export class Game3D {
                 delete this.remoteProtectedUntil[id];
                 delete this.pvpLastHitSentAt[id];
             }
+        });
+    }
+
+    _updateRemotePlayers(dt) {
+        const posT = 1 - Math.exp(-REMOTE_POS_SMOOTH_SPEED * dt);
+        const rotT = 1 - Math.exp(-REMOTE_ROT_SMOOTH_SPEED * dt);
+
+        Object.entries(this.others).forEach(([rawId, model]) => {
+            const id = Number(rawId);
+            const remote = this.remotePlayers[id];
+            if (!remote) return;
+
+            const targetX = remote.targetX ?? model.position.x;
+            const targetZ = remote.targetZ ?? model.position.z;
+            const targetY = (remote.targetY ?? this._getTerrainHeight(targetX, targetZ)) + (model.userData.groundOffset || 0);
+            const dist = Math.hypot(targetX - model.position.x, targetZ - model.position.z);
+
+            const prevX = model.position.x;
+            const prevZ = model.position.z;
+
+            if (dist > REMOTE_TELEPORT_DIST) {
+                model.position.set(targetX, targetY, targetZ);
+            } else {
+                model.position.x += (targetX - model.position.x) * posT;
+                model.position.z += (targetZ - model.position.z) * posT;
+                model.position.y += (targetY - model.position.y) * posT;
+            }
+
+            if (typeof remote.targetYaw === 'number') {
+                model.rotation.y = this._lerpAngle(model.rotation.y, remote.targetYaw, rotT);
+            }
+
+            const speed = Math.hypot(model.position.x - prevX, model.position.z - prevZ) / Math.max(dt, 1e-3);
+            const anim = speed > (this.playerSpeed * 1.05) ? 'run' : speed > REMOTE_IDLE_SPEED ? 'walk' : 'idle';
+            this._setCharacterAnim(model, anim);
         });
     }
 
@@ -1818,6 +1976,7 @@ export class Game3D {
 
         this._updatePlayer(dt);
         this._updateEnemyAI(dt);
+        this._updateRemotePlayers(dt);
         this._updateProj(dt);
         this._updateAmbient(time, dt);
         this._updateCombatCamera(dt);
@@ -1847,7 +2006,7 @@ export class Game3D {
             }
         }
 
-        if (time - this.lastSync > 500) { this.lastSync = time; this._sync(); }
+        if (time - this.lastSync > SYNC_INTERVAL_MS) { this.lastSync = time; this._sync(); }
         this.composer.render();
     }
 
@@ -1870,16 +2029,19 @@ export class Game3D {
 
         if (this.keys['KeyW'] || this.keys['ArrowUp']) forwardAxis += 1;
         if (this.keys['KeyS'] || this.keys['ArrowDown']) forwardAxis -= 1;
-        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis -= 1;
-        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis += 1;
+        // Intentionally inverted relative to previous implementation to match screen-space expectation.
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis += 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis -= 1;
 
         // Mouse controls look direction.
         const target = this._getMouseWorldPos();
         if (target) {
             const dx = target.x - this.playerModel.position.x;
             const dz = target.z - this.playerModel.position.z;
-            if (Math.hypot(dx, dz) > 1) {
-                this.playerModel.rotation.y = Math.atan2(dx, dz);
+            if (Math.hypot(dx, dz) > LOOK_DEADZONE) {
+                const desiredYaw = Math.atan2(dx, dz);
+                const turnT = 1 - Math.exp(-LOOK_SMOOTH_SPEED * dt);
+                this.playerModel.rotation.y = this._lerpAngle(this.playerModel.rotation.y, desiredYaw, turnT);
             }
         }
 
