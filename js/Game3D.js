@@ -36,8 +36,10 @@ const TARGET_MODEL_HEIGHT = 20;
 const CLASS_TINT_STRENGTH = 0.16;
 const ARENA_CENTER = { x: 1500, z: 1500 };
 const ARENA_DUST_RADIUS = 560;
+const ARENA_NO_MOB_RADIUS = 620;
 const PLAYER_COLLIDER_RADIUS = 11;
 const PLAYER_FOOT_CLEARANCE = 0.26;
+const PROJECTILE_WORLD_RADIUS = { mage: 2.4, archer: 1.2 };
 const PREMIUM_MANIFEST_URL = 'assets/premium/manifest.json';
 const CLASS_ACTIONS = {
     warrior: {
@@ -546,6 +548,39 @@ export class Game3D {
         this.arenaColliders.push({ x, z, r });
     }
 
+    _findWorldColliderHit(x, z, radius = 0) {
+        if (!this.arenaColliders?.length) return null;
+        for (const collider of this.arenaColliders) {
+            const dist = Math.hypot(x - collider.x, z - collider.z);
+            if (dist < (collider.r || 0) + radius) return collider;
+        }
+        return null;
+    }
+
+    _isInsideArenaProtectedZone(x, z, radius = ARENA_NO_MOB_RADIUS) {
+        return Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z) < radius;
+    }
+
+    _addLineColliders(x1, z1, x2, z2, radius = 5, spacingMul = 1.5) {
+        const dx = x2 - x1;
+        const dz = z2 - z1;
+        const len = Math.hypot(dx, dz);
+        if (len < 0.001) {
+            this._addArenaCircleCollider(x1, z1, radius);
+            return;
+        }
+        const step = Math.max(2, radius * spacingMul);
+        const steps = Math.max(1, Math.ceil(len / step));
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            this._addArenaCircleCollider(
+                x1 + dx * t,
+                z1 + dz * t,
+                radius
+            );
+        }
+    }
+
     // =================== WORLD ===================
     _world() {
         this.arenaColliders = [];
@@ -935,41 +970,201 @@ export class Game3D {
     }
 
     _buildArenaOutskirts() {
-        this._path([ARENA_CENTER.x - 430, ARENA_CENTER.z, 260, ARENA_CENTER.z], 28, 0x8B7355);
-        this._path([ARENA_CENTER.x + 430, ARENA_CENTER.z, 2740, ARENA_CENTER.z], 28, 0x8B7355);
-        this._path([ARENA_CENTER.x, ARENA_CENTER.z - 430, ARENA_CENTER.x, 260], 28, 0x8B7355);
-        this._path([ARENA_CENTER.x, ARENA_CENTER.z + 430, ARENA_CENTER.x, 2740], 28, 0x8B7355);
+        // Main exits from the arena and secondary ring roads.
+        this._path([ARENA_CENTER.x - 430, ARENA_CENTER.z, 260, ARENA_CENTER.z], 30, 0x8B7355);
+        this._path([ARENA_CENTER.x + 430, ARENA_CENTER.z, 2740, ARENA_CENTER.z], 30, 0x8B7355);
+        this._path([ARENA_CENTER.x, ARENA_CENTER.z - 430, ARENA_CENTER.x, 260], 30, 0x8B7355);
+        this._path([ARENA_CENTER.x, ARENA_CENTER.z + 430, ARENA_CENTER.x, 2740], 30, 0x8B7355);
+        this._path([520, 520, 2480, 520], 22, 0x7f674d);
+        this._path([520, 2480, 2480, 2480], 22, 0x7f674d);
+        this._path([520, 520, 520, 2480], 22, 0x7f674d);
+        this._path([2480, 520, 2480, 2480], 22, 0x7f674d);
 
-        this._zoneOverlay(500, 500, 700, 600, 0x2f632a, 0.14);
-        this._zoneOverlay(2500, 500, 680, 560, 0x355c2d, 0.13);
-        this._zoneOverlay(500, 2480, 720, 640, 0x467430, 0.12);
-        this._zoneOverlay(2500, 2450, 700, 620, 0x3b6b31, 0.12);
+        // Biome tinting + non-flat ground breakup.
+        this._zoneOverlay(520, 520, 760, 700, 0x2f632a, 0.16);
+        this._zoneOverlay(2480, 520, 740, 660, 0x355c2d, 0.15);
+        this._zoneOverlay(520, 2480, 780, 700, 0x467430, 0.14);
+        this._zoneOverlay(2480, 2480, 760, 680, 0x3b6b31, 0.14);
+        this._zoneOverlay(1500, 430, 1180, 380, 0x5f7f4a, 0.1);
+        this._zoneOverlay(1500, 2570, 1180, 380, 0x5c7f47, 0.1);
+        this._scatterGroundDetail(320, 2680, 320, 2680, 260);
 
-        this._scatterTrees(120, 2860, 120, 2860, 230, 0x2f6f31, 'pine');
-        this._scatterTrees(120, 2860, 120, 2860, 110, 0x4b8a39, 'oak');
-        this._scatterRocks(120, 2860, 120, 2860, 95);
+        // Dense forests for stealth and cover around the arena.
+        this._scatterTrees(120, 2860, 120, 2860, 260, 0x2f6f31, 'pine', { scaleMin: 1.2, scaleMax: 2.3, arenaBuffer: 730 });
+        this._scatterTrees(120, 2860, 120, 2860, 180, 0x4b8a39, 'oak', { scaleMin: 1.1, scaleMax: 2.1, arenaBuffer: 740 });
+        this._scatterForestCluster(470, 470, 380, 220, 0x2e6b31, 'pine');
+        this._scatterForestCluster(2480, 500, 360, 210, 0x367833, 'oak');
+        this._scatterForestCluster(560, 2460, 400, 230, 0x4f8b35, 'oak');
+        this._scatterForestCluster(2440, 2440, 390, 220, 0x3a7432, 'pine');
+        this._scatterForestCluster(920, 640, 280, 110, 0x2f6f31, 'pine');
+        this._scatterForestCluster(2040, 2360, 300, 120, 0x4d8f38, 'oak');
 
-        [[420, 1460], [2580, 1520], [1500, 380], [1500, 2630], [760, 760], [2220, 2240]].forEach(([x, z]) => this._building(x, z));
+        // Large natural blockers and silhouettes.
+        this._scatterRocks(120, 2860, 120, 2860, 140, { sizeMin: 6, sizeMax: 18, arenaBuffer: 760 });
 
-        for (let i = 0; i < 34; i++) {
-            const a = (i / 34) * Math.PI * 2;
-            const r = 1320 + Math.random() * 260;
+        const hamlets = [
+            [420, 1460, 1.45, 0.2],
+            [2580, 1520, 1.55, -0.25],
+            [1500, 380, 1.3, 0],
+            [1500, 2630, 1.3, Math.PI],
+            [760, 760, 1.4, 0.7],
+            [2220, 2240, 1.6, -0.4],
+            [640, 2250, 1.35, 0.5],
+            [2360, 740, 1.4, -0.65],
+            [1020, 2440, 1.28, -0.2],
+            [1980, 560, 1.35, 0.4],
+        ];
+        hamlets.forEach(([x, z, scale, rot]) => this._building(x, z, scale, rot));
+
+        // Open structures: enterable defensive compounds for PvP/PvE skirmishes.
+        this._addOpenOutpost(820, 1480, 1.2, 0.15);
+        this._addOpenOutpost(2180, 1500, 1.2, -0.22);
+        this._addOpenOutpost(1500, 880, 1.05, Math.PI * 0.5);
+        this._addOpenOutpost(1500, 2120, 1.08, -Math.PI * 0.5);
+
+        // Perimeter ridges + collision walling, keeps map readable and prevents empty horizon.
+        for (let i = 0; i < 44; i++) {
+            const a = (i / 44) * Math.PI * 2;
+            const r = 1320 + Math.random() * 300;
             const x = ARENA_CENTER.x + Math.cos(a) * r;
             const z = ARENA_CENTER.z + Math.sin(a) * r;
-            const h = 80 + Math.random() * 170;
-            const ridgeRadius = 80 + Math.random() * 110;
+            const h = 95 + Math.random() * 220;
+            const ridgeRadius = 90 + Math.random() * 130;
             const ridge = new THREE.Mesh(
-                new THREE.ConeGeometry(ridgeRadius, h, 8),
+                new THREE.ConeGeometry(ridgeRadius, h, 9),
                 new THREE.MeshStandardMaterial({ color: 0x6d675f, roughness: 0.94, metalness: 0.02 })
             );
-            const rx = Math.max(80, Math.min(MAP - 80, x));
-            const rz = Math.max(80, Math.min(MAP - 80, z));
-            ridge.position.set(rx, (h * 0.5) - 4, rz);
+            const rx = Math.max(90, Math.min(MAP - 90, x));
+            const rz = Math.max(90, Math.min(MAP - 90, z));
+            ridge.position.set(rx, this._getTerrainHeight(rx, rz) + (h * 0.5) - 3, rz);
             ridge.castShadow = true;
             ridge.receiveShadow = true;
             this.scene.add(ridge);
-            this._addArenaCircleCollider(rx, rz, ridgeRadius * 0.7);
+            this._addArenaCircleCollider(rx, rz, ridgeRadius * 0.72);
         }
+    }
+
+    _scatterForestCluster(cx, cz, radius, count, color, type) {
+        this._scatterTrees(
+            cx - radius, cx + radius,
+            cz - radius, cz + radius,
+            count, color, type,
+            {
+                scaleMin: 1.3,
+                scaleMax: 2.5,
+                arenaBuffer: 720,
+            }
+        );
+    }
+
+    _scatterGroundDetail(xMin, xMax, zMin, zMax, count) {
+        const palette = [0x5e7f45, 0x68874d, 0x56713e, 0x73644f, 0x7a6b56];
+        for (let i = 0; i < count; i++) {
+            const x = xMin + Math.random() * (xMax - xMin);
+            const z = zMin + Math.random() * (zMax - zMin);
+            if (this._isInsideArenaProtectedZone(x, z, 660)) continue;
+
+            const size = 16 + Math.random() * 52;
+            const patch = new THREE.Mesh(
+                new THREE.CircleGeometry(size, 16),
+                new THREE.MeshStandardMaterial({
+                    color: palette[i % palette.length],
+                    transparent: true,
+                    opacity: 0.17 + Math.random() * 0.08,
+                    roughness: 0.95,
+                    metalness: 0.0,
+                    depthWrite: false,
+                })
+            );
+            patch.rotation.x = -Math.PI / 2;
+            patch.rotation.z = Math.random() * Math.PI * 2;
+            patch.position.set(x, this._getTerrainHeight(x, z) + 0.15 + Math.random() * 0.03, z);
+            patch.receiveShadow = true;
+            this.scene.add(patch);
+        }
+    }
+
+    _addOpenOutpost(x, z, scale = 1, rot = 0) {
+        const g = new THREE.Group();
+        const halfW = 58 * scale;
+        const halfD = 46 * scale;
+        const wallH = 18 * scale;
+        const baseY = this._getTerrainHeight(x, z);
+        const wallMat = new THREE.MeshStandardMaterial({ color: 0x8e7f6d, roughness: 0.86, metalness: 0.04 });
+        const plankMat = new THREE.MeshStandardMaterial({ color: 0x5a4638, roughness: 0.9, metalness: 0.02 });
+
+        const localToWorld = (lx, lz) => ({
+            x: x + (lx * Math.cos(rot) - lz * Math.sin(rot)),
+            z: z + (lx * Math.sin(rot) + lz * Math.cos(rot)),
+        });
+
+        const base = new THREE.Mesh(
+            new THREE.BoxGeometry(halfW * 2.2, 2, halfD * 2.2),
+            new THREE.MeshStandardMaterial({ color: 0x756854, roughness: 0.9, metalness: 0.01 })
+        );
+        base.position.y = 1;
+        base.receiveShadow = true;
+        g.add(base);
+
+        const wallDefs = [
+            { x: 0, z: -halfD, w: halfW * 2, d: 6 },
+            { x: 0, z: halfD, w: halfW * 2, d: 6 },
+            { x: -halfW, z: -halfD * 0.55, w: 6, d: halfD * 0.85 },
+            { x: -halfW, z: halfD * 0.55, w: 6, d: halfD * 0.85 },
+            { x: halfW, z: -halfD * 0.55, w: 6, d: halfD * 0.85 },
+            { x: halfW, z: halfD * 0.55, w: 6, d: halfD * 0.85 },
+        ];
+
+        wallDefs.forEach((def) => {
+            const seg = new THREE.Mesh(new THREE.BoxGeometry(def.w, wallH, def.d), wallMat);
+            seg.position.set(def.x, wallH * 0.5, def.z);
+            seg.castShadow = true;
+            seg.receiveShadow = true;
+            g.add(seg);
+
+            if (def.w >= def.d) {
+                const a = localToWorld(def.x - def.w * 0.5, def.z);
+                const b = localToWorld(def.x + def.w * 0.5, def.z);
+                this._addLineColliders(a.x, a.z, b.x, b.z, Math.max(4, def.d * 0.9));
+            } else {
+                const a = localToWorld(def.x, def.z - def.d * 0.5);
+                const b = localToWorld(def.x, def.z + def.d * 0.5);
+                this._addLineColliders(a.x, a.z, b.x, b.z, Math.max(4, def.w * 0.9));
+            }
+        });
+
+        for (let i = 0; i < 4; i++) {
+            const sx = i < 2 ? -halfW : halfW;
+            const sz = i % 2 === 0 ? -halfD : halfD;
+            const tower = new THREE.Mesh(new THREE.CylinderGeometry(4.5 * scale, 5.6 * scale, wallH + 4, 8), wallMat);
+            tower.position.set(sx, (wallH + 4) * 0.5, sz);
+            tower.castShadow = true;
+            tower.receiveShadow = true;
+            g.add(tower);
+            const wp = localToWorld(sx, sz);
+            this._addArenaCircleCollider(wp.x, wp.z, 5.5 * scale);
+        }
+
+        for (let i = 0; i < 6; i++) {
+            const crate = new THREE.Mesh(
+                new THREE.BoxGeometry(7 * scale, 6 * scale, 7 * scale),
+                plankMat
+            );
+            const lx = (Math.random() - 0.5) * halfW * 1.3;
+            const lz = (Math.random() - 0.5) * halfD * 1.3;
+            crate.position.set(lx, 3 * scale, lz);
+            crate.rotation.y = Math.random() * Math.PI;
+            crate.castShadow = true;
+            crate.receiveShadow = true;
+            g.add(crate);
+
+            const wp = localToWorld(lx, lz);
+            this._addArenaCircleCollider(wp.x, wp.z, 4.8 * scale);
+        }
+
+        g.position.set(x, baseY, z);
+        g.rotation.y = rot;
+        this.scene.add(g);
     }
 
     _loadTiledTexture(loader, url, repeatX, repeatY, srgb = true, anisotropy = 1) {
@@ -998,103 +1193,198 @@ export class Game3D {
             const angle = Math.atan2(b.z - a.z, b.x - a.x);
             const m = new THREE.Mesh(new THREE.PlaneGeometry(len, width), new THREE.MeshStandardMaterial({ color, roughness: 0.95, metalness: 0 }));
             m.rotation.x = -Math.PI / 2; m.rotation.z = -angle;
-            m.position.copy(mid); m.position.y = 0.25;
+            m.position.copy(mid);
+            m.position.y = Math.max(
+                this._getTerrainHeight(mid.x, mid.z),
+                this._getArenaFloorHeight(mid.x, mid.z)
+            ) + 0.25;
             this.scene.add(m);
         }
     }
 
-    _tree(x, z, type, color) {
+    _tree(x, z, type, color, scale = 1) {
         const g = new THREE.Group();
+        const baseY = this._getTerrainHeight(x, z);
         // Trunk
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(2, 3, 20, 6), new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.9 }));
-        trunk.position.y = 10; trunk.castShadow = true; g.add(trunk);
+        const trunk = new THREE.Mesh(
+            new THREE.CylinderGeometry(2.1 * scale, 3.4 * scale, 24 * scale, 8),
+            new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.9 })
+        );
+        trunk.position.y = 12 * scale;
+        trunk.castShadow = true;
+        g.add(trunk);
 
         if (type === 'pine') {
-            for (let i = 0; i < 3; i++) {
-                const r = 14 - i * 3, h = 12 - i * 2;
+            for (let i = 0; i < 4; i++) {
+                const r = (18 - i * 3.6) * scale;
+                const h = (15 - i * 2.1) * scale;
                 const leaf = new THREE.Mesh(new THREE.ConeGeometry(r, h, 6), new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
-                leaf.position.y = 18 + i * 8; leaf.castShadow = true; g.add(leaf);
+                leaf.position.y = (22 + i * 9) * scale;
+                leaf.castShadow = true;
+                g.add(leaf);
                 leaf.userData.foliage = true;
             }
         } else {
-            const crown = new THREE.Mesh(new THREE.SphereGeometry(16, 8, 6), new THREE.MeshStandardMaterial({ color, roughness: 0.75 }));
-            crown.position.y = 32; crown.castShadow = true; g.add(crown);
+            const crown = new THREE.Mesh(
+                new THREE.SphereGeometry(18 * scale, 10, 8),
+                new THREE.MeshStandardMaterial({ color, roughness: 0.75 })
+            );
+            crown.scale.set(1.0, 0.85, 1.0);
+            crown.position.y = 36 * scale;
+            crown.castShadow = true;
+            g.add(crown);
             crown.userData.foliage = true;
         }
-        g.position.set(x, 0, z);
+        g.position.set(x, baseY, z);
         this.scene.add(g);
-        this._addArenaCircleCollider(x, z, type === 'pine' ? 8 : 10);
+        this._addArenaCircleCollider(x, z, (type === 'pine' ? 8 : 10) * Math.max(0.9, scale * 0.95));
     }
 
-    _scatterTrees(xMin, xMax, zMin, zMax, count, color, type) {
-        for (let i = 0; i < count; i++) {
+    _scatterTrees(xMin, xMax, zMin, zMax, count, color, type, opts = {}) {
+        const options = (opts && typeof opts === 'object') ? opts : {};
+        const scaleMin = options.scaleMin ?? 0.95;
+        const scaleMax = options.scaleMax ?? 1.45;
+        const arenaBuffer = options.arenaBuffer ?? 690;
+        const attempts = count * 7;
+        let planted = 0;
+
+        for (let i = 0; i < attempts && planted < count; i++) {
             const x = xMin + Math.random() * (xMax - xMin);
             const z = zMin + Math.random() * (zMax - zMin);
             if (x > 1300 && x < 1700 && z > 1300 && z < 1700) continue;
             if (Math.hypot(x - 2500, z - 2500) < 280) continue;
-            if (ARENA_MODE && Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z) < 690) continue;
-            this._tree(x, z, type, color);
+            if (ARENA_MODE && Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z) < arenaBuffer) continue;
+
+            const scale = scaleMin + Math.random() * Math.max(0.01, scaleMax - scaleMin);
+            if (this._findWorldColliderHit(x, z, 4.5 * Math.max(0.7, scale))) continue;
+            this._tree(x, z, type, color, scale);
+            planted++;
         }
     }
 
-    _scatterRocks(xMin, xMax, zMin, zMax, count) {
-        for (let i = 0; i < count; i++) {
+    _scatterRocks(xMin, xMax, zMin, zMax, count, opts = {}) {
+        const options = (opts && typeof opts === 'object') ? opts : {};
+        const sizeMin = options.sizeMin ?? 4;
+        const sizeMax = options.sizeMax ?? 12;
+        const arenaBuffer = options.arenaBuffer ?? 690;
+        const attempts = count * 6;
+        let spawned = 0;
+
+        for (let i = 0; i < attempts && spawned < count; i++) {
             const x = xMin + Math.random() * (xMax - xMin);
             const z = zMin + Math.random() * (zMax - zMin);
-            if (ARENA_MODE && Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z) < 690) continue;
-            const s = 4 + Math.random() * 8;
+            if (ARENA_MODE && Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z) < arenaBuffer) continue;
+            const s = sizeMin + Math.random() * Math.max(0.01, sizeMax - sizeMin);
+            if (this._findWorldColliderHit(x, z, Math.max(4, s * 0.75))) continue;
             const rock = new THREE.Mesh(
                 new THREE.DodecahedronGeometry(s, 0),
                 new THREE.MeshStandardMaterial({ color: 0x757575, roughness: 0.75, metalness: 0.05 })
             );
-            rock.position.set(x, s * 0.5, z);
+            rock.position.set(x, this._getTerrainHeight(x, z) + s * 0.52, z);
             rock.rotation.set(Math.random(), Math.random(), Math.random());
             rock.castShadow = true;
             this.scene.add(rock);
             this._addArenaCircleCollider(x, z, Math.max(3, s * 0.75));
+            spawned++;
         }
     }
 
-    _building(x, z) {
+    _building(x, z, scale = 1, rot = 0) {
         const g = new THREE.Group();
-        const body = new THREE.Mesh(new THREE.BoxGeometry(40, 25, 30), new THREE.MeshStandardMaterial({ color: 0x8D6E63, roughness: 0.85 }));
-        body.position.y = 12.5; body.castShadow = true; g.add(body);
-        const roof = new THREE.Mesh(new THREE.ConeGeometry(30, 15, 4), new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.9 }));
-        roof.position.y = 32; roof.rotation.y = Math.PI / 4; roof.castShadow = true; g.add(roof);
+        const bodyW = 44 * scale;
+        const bodyH = 28 * scale;
+        const bodyD = 34 * scale;
+        const body = new THREE.Mesh(
+            new THREE.BoxGeometry(bodyW, bodyH, bodyD),
+            new THREE.MeshStandardMaterial({ color: 0x8D6E63, roughness: 0.85 })
+        );
+        body.position.y = bodyH * 0.5;
+        body.castShadow = true;
+        body.receiveShadow = true;
+        g.add(body);
+
+        const roof = new THREE.Mesh(
+            new THREE.ConeGeometry(33 * scale, 17 * scale, 4),
+            new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.9 })
+        );
+        roof.position.y = bodyH + 11 * scale;
+        roof.rotation.y = Math.PI / 4;
+        roof.castShadow = true;
+        roof.receiveShadow = true;
+        g.add(roof);
         // Chimney
-        const chimney = new THREE.Mesh(new THREE.BoxGeometry(4, 10, 4), new THREE.MeshStandardMaterial({ color: 0x757575, roughness: 0.8 }));
-        chimney.position.set(10, 38, -5); chimney.castShadow = true; g.add(chimney);
+        const chimney = new THREE.Mesh(
+            new THREE.BoxGeometry(4 * scale, 10 * scale, 4 * scale),
+            new THREE.MeshStandardMaterial({ color: 0x757575, roughness: 0.8 })
+        );
+        chimney.position.set(10 * scale, bodyH + 16 * scale, -5 * scale);
+        chimney.castShadow = true;
+        g.add(chimney);
         // Door
-        const door = new THREE.Mesh(new THREE.PlaneGeometry(8, 14), new THREE.MeshStandardMaterial({ color: 0x4E342E, roughness: 0.95 }));
-        door.position.set(0, 7, 15.1); g.add(door);
+        const door = new THREE.Mesh(
+            new THREE.PlaneGeometry(8 * scale, 14 * scale),
+            new THREE.MeshStandardMaterial({ color: 0x4E342E, roughness: 0.95 })
+        );
+        door.position.set(0, 7 * scale, (bodyD * 0.5) + 0.12);
+        g.add(door);
         // Door frame
-        const frame = new THREE.Mesh(new THREE.BoxGeometry(10, 16, 1), new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.9 }));
-        frame.position.set(0, 8, 15.3); g.add(frame);
+        const frame = new THREE.Mesh(
+            new THREE.BoxGeometry(10 * scale, 16 * scale, 1.1 * scale),
+            new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.9 })
+        );
+        frame.position.set(0, 8 * scale, (bodyD * 0.5) + 0.35);
+        g.add(frame);
         // Windows with warm glow
-        [-12, 12].forEach(ox => {
-            const win = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshStandardMaterial({ color: 0xFFF9C4, emissive: 0xFFCC02, emissiveIntensity: 0.8 }));
-            win.position.set(ox, 14, 15.1); g.add(win);
+        [-12 * scale, 12 * scale].forEach(ox => {
+            const win = new THREE.Mesh(
+                new THREE.PlaneGeometry(6.5 * scale, 6.5 * scale),
+                new THREE.MeshStandardMaterial({ color: 0xFFF9C4, emissive: 0xFFCC02, emissiveIntensity: 0.8 })
+            );
+            win.position.set(ox, 14 * scale, (bodyD * 0.5) + 0.16);
+            g.add(win);
             // Window frame
-            const wf = new THREE.Mesh(new THREE.BoxGeometry(7, 7, 0.5), new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.9 }));
-            wf.position.set(ox, 14, 15.2); g.add(wf);
+            const wf = new THREE.Mesh(
+                new THREE.BoxGeometry(7.5 * scale, 7.5 * scale, 0.5 * scale),
+                new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.9 })
+            );
+            wf.position.set(ox, 14 * scale, (bodyD * 0.5) + 0.32);
+            g.add(wf);
         });
-        g.position.set(x, 0, z);
+        const baseY = this._getTerrainHeight(x, z);
+        g.position.set(x, baseY, z);
+        g.rotation.y = rot;
         this.scene.add(g);
-        this._addArenaCircleCollider(x, z, 24);
+
+        const localToWorld = (lx, lz) => ({
+            x: x + (lx * Math.cos(rot) - lz * Math.sin(rot)),
+            z: z + (lx * Math.sin(rot) + lz * Math.cos(rot)),
+        });
+        const p1 = localToWorld(-bodyW * 0.45, 0);
+        const p2 = localToWorld(bodyW * 0.45, 0);
+        const p3 = localToWorld(0, -bodyD * 0.42);
+        const p4 = localToWorld(0, bodyD * 0.42);
+        this._addArenaCircleCollider(x, z, 9.5 * scale);
+        this._addArenaCircleCollider(p1.x, p1.z, 8.8 * scale);
+        this._addArenaCircleCollider(p2.x, p2.z, 8.8 * scale);
+        this._addArenaCircleCollider(p3.x, p3.z, 8.8 * scale);
+        this._addArenaCircleCollider(p4.x, p4.z, 8.8 * scale);
+        this._addLineColliders(p1.x, p1.z, p2.x, p2.z, 6.5 * scale, 1.3);
+        this._addLineColliders(p3.x, p3.z, p4.x, p4.z, 6.2 * scale, 1.3);
     }
 
     _well(x, z) {
+        const y = this._getTerrainHeight(x, z);
         const base = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 10, 8), new THREE.MeshStandardMaterial({ color: 0x9E9E9E, roughness: 0.7, metalness: 0.1 }));
-        base.position.set(x, 5, z); base.castShadow = true; this.scene.add(base);
+        base.position.set(x, y + 5, z); base.castShadow = true; this.scene.add(base);
         const water = new THREE.Mesh(new THREE.CircleGeometry(6, 8), new THREE.MeshStandardMaterial({ color: 0x1976D2, roughness: 0.1, metalness: 0.3 }));
-        water.rotation.x = -Math.PI / 2; water.position.set(x, 10.1, z); this.scene.add(water);
+        water.rotation.x = -Math.PI / 2; water.position.set(x, y + 10.1, z); this.scene.add(water);
         // Roof
         const roof = new THREE.Mesh(new THREE.ConeGeometry(10, 8, 4), new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.85 }));
-        roof.position.set(x, 18, z); roof.rotation.y = Math.PI / 4; this.scene.add(roof);
+        roof.position.set(x, y + 18, z); roof.rotation.y = Math.PI / 4; this.scene.add(roof);
         // Posts
         [-6, 6].forEach(ox => {
             const post = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 16, 4), new THREE.MeshStandardMaterial({ color: 0x5D4037 }));
-            post.position.set(x + ox, 14, z); this.scene.add(post);
+            post.position.set(x + ox, y + 14, z); this.scene.add(post);
         });
         this._addArenaCircleCollider(x, z, 11);
     }
@@ -1525,8 +1815,10 @@ export class Game3D {
 
     // =================== ENEMIES ===================
     _spawnEnemies() {
-        const defs = ARENA_MODE ? [...MOBS, ...ARENA_EXTRA_MOBS] : MOBS;
-        defs.forEach(def => this._spawnMob(def));
+        const defs = [...MOBS];
+        defs
+            .filter((def) => !ARENA_MODE || !this._isInsideArenaProtectedZone(def.x, def.z))
+            .forEach(def => this._spawnMob(def));
     }
 
     _spawnMob(def) {
@@ -2102,6 +2394,70 @@ export class Game3D {
         }
     }
 
+    _spawnProjectileWorldImpact(projectile) {
+        const pos = projectile.mesh.position.clone();
+        if (projectile.type === 'mage') {
+            const burst = new THREE.Mesh(
+                new THREE.SphereGeometry(2.8, 10, 10),
+                new THREE.MeshBasicMaterial({
+                    color: 0xe791ff,
+                    transparent: true,
+                    opacity: 0.7,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                })
+            );
+            burst.position.copy(pos);
+            this.scene.add(burst);
+            const start = performance.now();
+            const life = 200;
+            const anim = () => {
+                const t = (performance.now() - start) / life;
+                if (t >= 1) {
+                    this.scene.remove(burst);
+                    burst.geometry.dispose();
+                    burst.material.dispose();
+                    return;
+                }
+                const s = 1 + t * 2.8;
+                burst.scale.setScalar(s);
+                burst.material.opacity = 0.7 * (1 - t);
+                requestAnimationFrame(anim);
+            };
+            anim();
+        } else {
+            for (let i = 0; i < 6; i++) {
+                const spark = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.35, 4, 4),
+                    new THREE.MeshBasicMaterial({ color: 0xd5c4a8 })
+                );
+                spark.position.copy(pos);
+                this.scene.add(spark);
+                const vx = (Math.random() - 0.5) * 2.5;
+                const vy = 1.3 + Math.random() * 2;
+                const vz = (Math.random() - 0.5) * 2.5;
+                const born = performance.now();
+                const life = 280;
+                const anim = () => {
+                    const t = (performance.now() - born) / life;
+                    if (t >= 1) {
+                        this.scene.remove(spark);
+                        spark.geometry.dispose();
+                        spark.material.dispose();
+                        return;
+                    }
+                    spark.position.x += vx * 0.5;
+                    spark.position.y += vy * 0.5 - t * 1.8;
+                    spark.position.z += vz * 0.5;
+                    spark.material.opacity = 1 - t;
+                    spark.material.transparent = true;
+                    requestAnimationFrame(anim);
+                };
+                anim();
+            }
+        }
+    }
+
     _ranged(pos, angle, dmg, color, speed, lifespan, isLocal) {
         const proj = new THREE.Group();
         const projectileType = color === 0xE040FB ? 'mage' : 'archer';
@@ -2171,7 +2527,8 @@ export class Game3D {
 
         this.projectiles.push({
             mesh: proj, vx: Math.sin(angle) * speed, vz: Math.cos(angle) * speed,
-            dmg, isLocal, born: performance.now(), life: lifespan, type: projectileType
+            dmg, isLocal, born: performance.now(), life: lifespan, type: projectileType,
+            worldRadius: PROJECTILE_WORLD_RADIUS[projectileType] || 1.2,
         });
     }
 
@@ -3583,6 +3940,28 @@ export class Game3D {
                 p.mesh.scale.setScalar(pulse);
             } else {
                 p.mesh.rotation.y = Math.atan2(p.vx, p.vz);
+            }
+
+            if (
+                p.mesh.position.x < 8 || p.mesh.position.x > MAP - 8
+                || p.mesh.position.z < 8 || p.mesh.position.z > MAP - 8
+            ) {
+                this._spawnProjectileWorldImpact(p);
+                this.scene.remove(p.mesh);
+                this.projectiles.splice(i, 1);
+                continue;
+            }
+
+            const worldHit = this._findWorldColliderHit(
+                p.mesh.position.x,
+                p.mesh.position.z,
+                p.worldRadius || 1.2
+            );
+            if (worldHit) {
+                this._spawnProjectileWorldImpact(p);
+                this.scene.remove(p.mesh);
+                this.projectiles.splice(i, 1);
+                continue;
             }
 
             // Hit check
