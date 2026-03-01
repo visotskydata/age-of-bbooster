@@ -1,0 +1,106 @@
+{
+  "models": {
+    "warrior": {
+      "urls": [
+        "assets/models/warrior.glb"
+      ],
+      "yawOffset": 0,
+      "targetHeight": 20
+    },
+    "mage": {
+      "urls": [
+        "assets/models/mage.glb"
+      ],
+      "yawOffset": 0,
+      "targetHeight": 20
+    },
+    "archer": {
+      "urls": [
+        "assets/models/archer.glb"
+      ],
+      "yawOffset": 0,
+      "targetHeight": 20
+    },
+    "skeleton": {
+      "urls": [
+        "assets/models/skeleton.glb"
+      ],
+      "yawOffset": 0,
+      "targetHeight": 19
+    },
+    "darkmage": {
+      "urls": [
+        "assets/models/mage.glb"
+      ],
+      "yawOffset": 0,
+      "targetHeight": 20
+    }
+  },
+  "mobModelMap": {
+    "skeleton": "skeleton",
+    "darkmage": "darkmage"
+  },
+  "classActions": {
+    "warrior": {
+      "melee": [
+        "1h_melee_attack_slice_diagonal",
+        "1h_melee_attack_chop",
+        "1h_melee_attack_stab"
+      ]
+    },
+    "mage": {
+      "cast": [
+        "spellcast_shoot",
+        "spellcast_raise",
+        "spellcasting"
+      ]
+    },
+    "archer": {
+      "cast": [
+        "1h_ranged_shoot",
+        "1h_ranged_shooting",
+        "throw"
+      ]
+    }
+  },
+  "mobActions": {
+    "skeleton": {
+      "idle": [
+        "idle_combat",
+        "idle",
+        "idle_b"
+      ],
+      "run": [
+        "running_a",
+        "running_b",
+        "running_c"
+      ],
+      "walk": [
+        "walking_a",
+        "walking_b"
+      ],
+      "attack": [
+        "1h_melee_attack_slice_diagonal",
+        "1h_melee_attack_chop"
+      ]
+    },
+    "darkmage": {
+      "idle": [
+        "idle",
+        "spellcasting"
+      ],
+      "run": [
+        "running_a",
+        "running_b"
+      ],
+      "walk": [
+        "walking_a",
+        "walking_b"
+      ],
+      "attack": [
+        "spellcast_shoot",
+        "spellcast_raise"
+      ]
+    }
+  }
+}
