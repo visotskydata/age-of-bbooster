@@ -721,10 +721,46 @@ export class Game3D {
             head.userData.bodyPart = 'head';
             g.add(head);
             parts.head = head;
+            // Snout
+            const snout = new THREE.Mesh(new THREE.ConeGeometry(1.5 * s, 4 * s, 4), new THREE.MeshStandardMaterial({ color: 0x8E8E8E }));
+            snout.rotation.x = -Math.PI / 2; snout.position.set(11 * s, 5.5 * s, 0);
+            g.add(snout);
+            parts.snout = snout;
+            // Eyes
             [-1 * s, 1 * s].forEach(ox => {
                 const e = new THREE.Mesh(new THREE.SphereGeometry(0.6 * s, 4, 4), new THREE.MeshBasicMaterial({ color: 0xFF0000 }));
                 e.position.set(9 * s, 7 * s, ox); g.add(e);
             });
+            // Ears
+            [-1.5 * s, 1.5 * s].forEach(oz => {
+                const ear = new THREE.Mesh(new THREE.ConeGeometry(1 * s, 2.5 * s, 3), new THREE.MeshStandardMaterial({ color: 0x6E6E6E }));
+                ear.position.set(7 * s, 9 * s, oz);
+                g.add(ear);
+            });
+            // Legs (4)
+            const legPositions = [
+                { x: 4 * s, z: 2.5 * s, name: 'legFR' }, { x: 4 * s, z: -2.5 * s, name: 'legFL' },
+                { x: -4 * s, z: 2.5 * s, name: 'legBR' }, { x: -4 * s, z: -2.5 * s, name: 'legBL' }
+            ];
+            legPositions.forEach(lp => {
+                const leg = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.7 * s, 0.5 * s, 5 * s, 4),
+                    new THREE.MeshStandardMaterial({ color: 0x6E6E6E })
+                );
+                leg.position.set(lp.x, 1.5 * s, lp.z);
+                leg.castShadow = true;
+                g.add(leg);
+                parts[lp.name] = leg;
+            });
+            // Tail
+            const tail = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.8 * s, 0.3 * s, 6 * s, 4),
+                new THREE.MeshStandardMaterial({ color: 0x8E8E8E })
+            );
+            tail.position.set(-8 * s, 6 * s, 0);
+            tail.rotation.z = -0.5;
+            g.add(tail);
+            parts.tail = tail;
         } else if (type === 'darkmage') {
             // Robe (torso)
             const robe = new THREE.Mesh(new THREE.ConeGeometry(5 * s, 16 * s, 6), new THREE.MeshStandardMaterial({ color: c }));
@@ -760,24 +796,39 @@ export class Game3D {
             g.add(head);
             parts.head = head;
             // Wings
+            const wings = [];
             [-1, 1].forEach(side => {
                 const wing = new THREE.Mesh(new THREE.PlaneGeometry(25, 15), new THREE.MeshStandardMaterial({ color: 0xFF4400, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
                 wing.position.set(side * 18, 20, -5); wing.rotation.y = side * 0.3; g.add(wing);
+                wings.push(wing);
             });
+            parts.wings = wings;
+            // Tail
+            const tail = new THREE.Mesh(
+                new THREE.CylinderGeometry(3, 0.5, 22, 6),
+                new THREE.MeshStandardMaterial({ color: 0xAA0000 })
+            );
+            tail.position.set(0, 10, -18); tail.rotation.x = 0.7;
+            g.add(tail);
+            parts.tail = tail;
         } else if (type === 'kraken') {
             const body = new THREE.Mesh(new THREE.SphereGeometry(12, 8, 8), new THREE.MeshStandardMaterial({ color: c }));
             body.position.y = 12; body.castShadow = true;
             body.userData.bodyPart = 'torso';
             g.add(body);
             parts.torso = body;
+            const tentacles = [];
             for (let i = 0; i < 8; i++) {
                 const a = (i / 8) * Math.PI * 2;
                 const tent = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 0.5, 18, 6), new THREE.MeshStandardMaterial({ color: 0x00ACC1 }));
                 tent.position.set(Math.cos(a) * 14, 4, Math.sin(a) * 14);
                 tent.rotation.x = Math.cos(a) * 0.4; tent.rotation.z = Math.sin(a) * 0.4;
-                tent.userData.bodyPart = 'arm_right'; // Tentacles count as arms
+                tent.userData.bodyPart = 'arm_right';
+                tent.userData.tentacleAngle = a;
                 g.add(tent);
+                tentacles.push(tent);
             }
+            parts.tentacles = tentacles;
             // Eyes
             [-4, 4].forEach(ox => {
                 const e = new THREE.Mesh(new THREE.SphereGeometry(2, 6, 6), new THREE.MeshBasicMaterial({ color: 0x76FF03 }));
@@ -859,7 +910,14 @@ export class Game3D {
 
         this.enemies.push({
             model, def: { ...def }, hp: def.hp, maxHp: def.hp,
-            alive: true, hpBar: hp, wanderT: 0, wanderA: Math.random() * Math.PI * 2, lastAtk: 0
+            alive: true, hpBar: hp, wanderT: 0, wanderA: Math.random() * Math.PI * 2, lastAtk: 0,
+            // Animation state
+            animPhase: Math.random() * Math.PI * 2, // Random offset so mobs aren't synchronized
+            isChasing: false,
+            attackAnim: 0, // 0 = not attacking, >0 = attack animation progress
+            lastVx: 0, lastVz: 0, // Momentum tracking
+            idleTimer: 0,
+            specialAnimTimer: Math.random() * 5000, // For unique idle behaviors
         });
     }
 
@@ -1621,30 +1679,140 @@ export class Game3D {
             this.playerModel.rotation.y += (a - this.playerModel.rotation.y) * 0.15;
         }
 
-        // Procedural walk animation
+        // ===== HALF SWORD STYLE PROCEDURAL ANIMATION =====
         const parts = this.playerModel.userData.parts;
-        if (parts && (vx || vz)) {
-            const t = performance.now() * 0.008;
-            // Leg swing
-            parts.leftLeg.rotation.x = Math.sin(t) * 0.5;
-            parts.rightLeg.rotation.x = Math.sin(t + Math.PI) * 0.5;
-            // Arm swing (only left, right is weapon)
+        if (!parts) return;
+
+        const now = performance.now();
+        const isMoving = !!(vx || vz);
+        const cls = this.user.class || 'warrior';
+
+        // Momentum tracking for weight feel
+        if (!this._playerMomentum) this._playerMomentum = 0;
+        if (!this._playerStepPhase) this._playerStepPhase = 0;
+        if (!this._playerBreathPhase) this._playerBreathPhase = 0;
+
+        if (isMoving) {
+            // Build up momentum (heavy start, like real body)
+            this._playerMomentum = Math.min(1.0, this._playerMomentum + dt * 3.0);
+            const momentum = this._playerMomentum;
+
+            // Step frequency increases with momentum
+            const stepSpeed = 0.006 + momentum * 0.006;
+            this._playerStepPhase += stepSpeed * (now - (this._lastPlayerAnimTime || now));
+            const t = this._playerStepPhase;
+
+            // === LEGS — heavy footfall, asymmetric like real walking ===
+            const legAmplitude = 0.35 + momentum * 0.35; // Bigger strides at full speed
+            const legSin = Math.sin(t);
+            const legSinOpp = Math.sin(t + Math.PI);
+            // Add "snap" to ground contact — sharper at bottom of stride
+            parts.leftLeg.rotation.x = legSin * legAmplitude + Math.sin(t * 2) * 0.08;
+            parts.rightLeg.rotation.x = legSinOpp * legAmplitude + Math.sin((t + Math.PI) * 2) * 0.08;
+            // Legs also spread slightly
+            parts.leftLeg.rotation.z = -0.02 + Math.abs(legSin) * 0.04;
+            parts.rightLeg.rotation.z = 0.02 - Math.abs(legSinOpp) * 0.04;
+
+            // === BODY BOB — vertical bounce on each footfall ===
+            // Double frequency (each foot hits ground), with impact feel
+            const bob = Math.abs(Math.sin(t)) * 1.0 * momentum;
+            const impact = Math.pow(Math.abs(Math.sin(t)), 3) * 0.4; // Sharp impact
+            this.playerModel.position.y = bob - impact;
+
+            // === TORSO — lean into movement direction + twist ===
+            const leanAmount = 0.06 + momentum * 0.04;
+            parts.torso.rotation.x = leanAmount; // Forward lean
+            parts.torso.rotation.z = Math.sin(t) * 0.04 * momentum; // Side-to-side sway
+            parts.torso.rotation.y = Math.sin(t) * 0.03 * momentum; // Shoulder twist
+
+            // === HEAD — counter-rotation for stabilization (human instinct) ===
+            parts.head.rotation.z = -Math.sin(t) * 0.025 * momentum;
+            parts.head.rotation.x = -leanAmount * 0.3; // Head stays more level
+            // Subtle look-ahead bob
+            parts.head.position.y = 16 + Math.sin(t * 2) * 0.15 * momentum;
+
+            // === LEFT ARM — natural counter-swing to legs ===
             if (!this.isBlocking) {
-                parts.leftArm.rotation.x = Math.sin(t + Math.PI) * 0.4;
+                parts.leftArm.rotation.x = legSinOpp * 0.5 * momentum;
+                parts.leftArm.rotation.z = 0.2 + Math.abs(legSinOpp) * 0.05;
             }
-            // Body bob
-            this.playerModel.position.y = Math.abs(Math.sin(t * 2)) * 0.8;
-            // Slight torso lean
-            parts.torso.rotation.x = 0.05;
-        } else if (parts) {
-            // Idle: return to rest + breathing
-            const breath = Math.sin(performance.now() * 0.003) * 0.02;
-            parts.leftLeg.rotation.x *= 0.85;
-            parts.rightLeg.rotation.x *= 0.85;
-            if (!this.isBlocking) parts.leftArm.rotation.x *= 0.85;
-            parts.torso.rotation.x = breath;
-            this.playerModel.position.y *= 0.9;
+
+            // === WEAPON ARM — class-specific ready position while moving ===
+            if (!this.playerModel.userData.swingState.active) {
+                if (cls === 'warrior') {
+                    // Sword slightly raised and ready
+                    parts.rightArmPivot.rotation.x = -0.15 + legSin * 0.05 * momentum;
+                    parts.rightArmPivot.rotation.z = 0.08;
+                } else if (cls === 'mage') {
+                    // Staff held at angle
+                    parts.rightArmPivot.rotation.x = -0.1 + Math.sin(t * 0.7) * 0.03;
+                } else {
+                    // Bow at ready
+                    parts.rightArmPivot.rotation.x = -0.2 + legSin * 0.03 * momentum;
+                }
+            }
+
+        } else {
+            // === IDLE — Half Sword breathing: deep, heavy, alive ===
+            this._playerMomentum *= (1 - dt * 4); // Decelerate momentum
+            if (this._playerMomentum < 0.01) this._playerMomentum = 0;
+            const momentum = this._playerMomentum;
+
+            this._playerBreathPhase += dt * 2.5;
+            const breathT = this._playerBreathPhase;
+
+            // Smooth return for legs (deceleration feel)
+            const decelFactor = 0.85 - momentum * 0.3;
+            parts.leftLeg.rotation.x *= decelFactor;
+            parts.rightLeg.rotation.x *= decelFactor;
+            parts.leftLeg.rotation.z *= 0.9;
+            parts.rightLeg.rotation.z *= 0.9;
+
+            // Body bob slowdown
+            this.playerModel.position.y *= 0.85;
+
+            // === BREATHING — chest rises, arms drift, subtle sway ===
+            const breathDepth = 0.025;
+            const breathCycle = Math.sin(breathT);
+            const breathCycleSlow = Math.sin(breathT * 0.7);
+
+            // Torso breathing — chest expansion
+            parts.torso.rotation.x = breathCycle * breathDepth;
+            parts.torso.scale.y = 1 + breathCycle * 0.012; // Chest expansion
+            parts.torso.rotation.z *= 0.9; // Settle twist
+            parts.torso.rotation.y *= 0.9;
+
+            // Head subtle movement — looking around slightly
+            parts.head.rotation.z = breathCycleSlow * 0.01;
+            parts.head.rotation.y = Math.sin(breathT * 0.3) * 0.015; // Very slow look
+            parts.head.rotation.x = breathCycle * 0.008;
+            parts.head.position.y = 16; // Reset
+
+            // Arms relax
+            if (!this.isBlocking) {
+                parts.leftArm.rotation.x *= 0.88;
+                parts.leftArm.rotation.z = 0.2 + breathCycle * 0.02;
+            }
+
+            // === CLASS-SPECIFIC IDLE ===
+            if (!this.playerModel.userData.swingState.active) {
+                if (cls === 'warrior') {
+                    // Sword resting, slight wrist roll
+                    parts.rightArmPivot.rotation.x *= 0.9;
+                    parts.rightArmPivot.rotation.z = breathCycleSlow * 0.03;
+                } else if (cls === 'mage') {
+                    // Staff gentle sway, orb pulses (handled by emissive elsewhere)
+                    parts.rightArmPivot.rotation.x = Math.sin(breathT * 0.5) * 0.04;
+                    parts.rightArmPivot.rotation.z = Math.cos(breathT * 0.3) * 0.02;
+                } else {
+                    // Archer — bow at rest, slight shift
+                    parts.rightArmPivot.rotation.x *= 0.92;
+                    parts.rightArmPivot.rotation.z = breathCycleSlow * 0.02;
+                }
+            }
         }
+
+        this._lastPlayerAnimTime = now;
 
         // HP bar
         const pct = (this.user.hp || 100) / (this.user.max_hp || 100);
@@ -1655,24 +1823,39 @@ export class Game3D {
 
     _updateEnemyAI(dt) {
         const px = this.playerModel.position.x, pz = this.playerModel.position.z;
+        const now = performance.now();
+
         this.enemies.forEach(e => {
             if (!e.alive) return;
             const ex = e.model.position.x, ez = e.model.position.z;
             const dist = Math.hypot(px - ex, pz - ez);
+            const parts = e.model.userData.parts || {};
+            const type = e.def.type;
+
+            // Update animation phase
+            e.animPhase += dt * 5;
+            const t = e.animPhase;
+            const prevChasing = e.isChasing;
 
             if (dist < e.def.range) {
+                e.isChasing = true;
                 // Chase (with leg debuff check)
                 const a = Math.atan2(px - ex, pz - ez);
-                const legSlow = (e._legDebuff && performance.now() < e._legDebuff) ? 0.3 : 1.0;
-                e.model.position.x += Math.sin(a) * e.def.spd * dt * legSlow;
-                e.model.position.z += Math.cos(a) * e.def.spd * dt * legSlow;
+                const legSlow = (e._legDebuff && now < e._legDebuff) ? 0.3 : 1.0;
+                const moveSpd = e.def.spd * dt * legSlow;
+                e.model.position.x += Math.sin(a) * moveSpd;
+                e.model.position.z += Math.cos(a) * moveSpd;
                 e.model.rotation.y = a;
+
+                // === CHASE ANIMATIONS PER MOB TYPE ===
+                this._animateMobChase(e, parts, type, t, dt, dist);
+
                 // Melee
-                if (dist < (e.def.isBoss ? 40 : 20) && performance.now() - e.lastAtk > 1200) {
-                    e.lastAtk = performance.now();
-                    const armWeak = (e._armDebuff && performance.now() < e._armDebuff) ? 0.6 : 1.0;
+                if (dist < (e.def.isBoss ? 40 : 20) && now - e.lastAtk > 1200) {
+                    e.lastAtk = now;
+                    e.attackAnim = 1.0; // Start attack animation
+                    const armWeak = (e._armDebuff && now < e._armDebuff) ? 0.6 : 1.0;
                     let dmg = Math.max(1, Math.round((e.def.atk * armWeak) - (this.user.defense || 5)));
-                    // Block reduces damage
                     if (this.isBlocking) {
                         dmg = Math.round(dmg * 0.4);
                         this._floatDmg(this.playerModel.position, 'BLOCKED', '#44AAFF');
@@ -1695,18 +1878,26 @@ export class Game3D {
                     }
                 }
             } else {
+                e.isChasing = false;
                 // Wander
                 e.wanderT -= dt * 1000;
                 if (e.wanderT <= 0) { e.wanderT = 2000 + Math.random() * 3000; e.wanderA = Math.random() * Math.PI * 2; }
-                if (Math.random() > 0.003) {
+                const isWandering = Math.random() > 0.003;
+                if (isWandering) {
                     e.model.position.x += Math.sin(e.wanderA) * e.def.spd * 0.3 * dt;
                     e.model.position.z += Math.cos(e.wanderA) * e.def.spd * 0.3 * dt;
                     e.model.rotation.y = e.wanderA;
                 }
+
+                // === IDLE ANIMATIONS PER MOB TYPE ===
+                this._animateMobIdle(e, parts, type, t, dt, isWandering);
             }
 
-            // Breathing animation
-            e.model.position.y = Math.sin(performance.now() * 0.003 + e.def.x) * 0.5;
+            // Attack animation decay
+            if (e.attackAnim > 0) {
+                e.attackAnim = Math.max(0, e.attackAnim - dt * 4);
+                this._animateMobAttack(e, parts, type, e.attackAnim);
+            }
 
             // HP bar
             const pct = e.hp / e.maxHp;
@@ -1714,6 +1905,405 @@ export class Game3D {
             e.hpBar.fillMesh.position.x = -e.hpBar.maxW * (1 - pct) / 2;
             e.hpBar.fillMesh.material.color.setHex(pct > 0.5 ? 0x4CAF50 : pct > 0.25 ? 0xFFC107 : 0xFF4B4B);
         });
+    }
+
+    // =================== MOB ANIMATIONS (Half Sword Style) ===================
+
+    _animateMobIdle(e, parts, type, t, dt, isWandering) {
+        const s = e.def.isBoss ? 2.5 : 1;
+
+        switch (type) {
+            case 'slime': {
+                // Slime: rhythmic bouncing with squash & stretch
+                const bounce = Math.sin(t * 1.5);
+                const squash = 1 + bounce * 0.15;
+                const stretch = 1 - bounce * 0.08;
+                if (parts.torso) {
+                    parts.torso.scale.y = 0.6 * stretch;
+                    parts.torso.scale.x = squash;
+                    parts.torso.scale.z = squash;
+                }
+                // Periodic hop
+                const hopPhase = Math.sin(t * 1.5);
+                e.model.position.y = Math.max(0, hopPhase) * 3 * s;
+                // Wobble
+                e.model.rotation.z = Math.sin(t * 0.8) * 0.06;
+                e.model.rotation.x = Math.cos(t * 0.6) * 0.04;
+                // Occasional bubble pop (subtle scale pulse)
+                if (Math.sin(t * 3) > 0.95 && parts.torso) {
+                    parts.torso.scale.setScalar(1.05);
+                }
+                break;
+            }
+            case 'skeleton': {
+                // Skeleton: jittery, unsteady, bones rattling
+                const jitter = () => (Math.random() - 0.5) * 0.03;
+                // Head looks around nervously
+                if (parts.head) {
+                    parts.head.rotation.y = Math.sin(t * 0.7) * 0.4 + jitter();
+                    parts.head.rotation.z = Math.sin(t * 1.1) * 0.08 + jitter();
+                    // Jaw clatter
+                    parts.head.position.y = 14 * s + Math.abs(Math.sin(t * 6)) * 0.3;
+                }
+                // Torso sways unsteadily
+                if (parts.torso) {
+                    parts.torso.rotation.z = Math.sin(t * 0.9) * 0.05 + jitter();
+                    parts.torso.rotation.x = Math.cos(t * 0.7) * 0.03;
+                }
+                // Arms hang and sway loosely
+                if (parts.armRight) {
+                    parts.armRight.rotation.z = Math.sin(t * 1.3) * 0.15 + jitter();
+                    parts.armRight.rotation.x = Math.cos(t * 0.8) * 0.1;
+                }
+                if (parts.armLeft) {
+                    parts.armLeft.rotation.z = -Math.sin(t * 1.1) * 0.12 + jitter();
+                }
+                // Weapon sway
+                if (parts.weapon) {
+                    parts.weapon.rotation.z = Math.sin(t * 0.5) * 0.1;
+                }
+                // Legs shuffle
+                if (parts.legRight) parts.legRight.rotation.x = Math.sin(t * 1.5) * 0.06;
+                if (parts.legLeft) parts.legLeft.rotation.x = Math.sin(t * 1.5 + 1) * 0.06;
+                // Subtle body bob
+                e.model.position.y = Math.sin(t * 2) * 0.3;
+                break;
+            }
+            case 'wolf': {
+                // Wolf: sniffing, looking around, tail wag, paw scraping
+                const breathe = Math.sin(t * 1.2);
+                // Body breathing
+                if (parts.torso) {
+                    parts.torso.scale.x = 1 + breathe * 0.02;
+                }
+                // Head looks around (sniffing)
+                if (parts.head) {
+                    parts.head.rotation.y = Math.sin(t * 0.4) * 0.3;
+                    parts.head.rotation.x = Math.sin(t * 0.8) * 0.1; // Nose up/down sniffing
+                }
+                // Snout twitches
+                if (parts.snout) {
+                    parts.snout.rotation.x = -Math.PI / 2 + Math.sin(t * 3) * 0.05;
+                }
+                // Tail slow wag
+                if (parts.tail) {
+                    parts.tail.rotation.y = Math.sin(t * 1.0) * 0.3;
+                    parts.tail.rotation.x = Math.sin(t * 0.6) * 0.1;
+                }
+                // Legs slight shift weight
+                if (parts.legFR) parts.legFR.rotation.x = Math.sin(t * 0.5) * 0.04;
+                if (parts.legFL) parts.legFL.rotation.x = Math.sin(t * 0.5 + 0.5) * 0.04;
+                if (parts.legBR) parts.legBR.rotation.x = Math.sin(t * 0.5 + 1) * 0.03;
+                if (parts.legBL) parts.legBL.rotation.x = Math.sin(t * 0.5 + 1.5) * 0.03;
+                // Subtle body sway
+                e.model.position.y = Math.sin(t * 1.5) * 0.2;
+                break;
+            }
+            case 'darkmage': {
+                // Dark mage: levitating, robe swaying, orb orbiting
+                // Levitation bob
+                e.model.position.y = 3 + Math.sin(t * 0.8) * 2;
+                // Robe sway
+                if (parts.torso) {
+                    parts.torso.rotation.z = Math.sin(t * 0.5) * 0.05;
+                    parts.torso.rotation.y = Math.sin(t * 0.3) * 0.04;
+                }
+                // Head slow turn
+                if (parts.head) {
+                    parts.head.rotation.y = Math.sin(t * 0.4) * 0.2;
+                }
+                // Staff arm sways
+                if (parts.armRight) {
+                    parts.armRight.rotation.z = Math.sin(t * 0.6) * 0.1;
+                    parts.armRight.rotation.x = Math.cos(t * 0.4) * 0.08;
+                }
+                // Orb orbit around mage
+                if (parts.weapon) {
+                    const orbRadius = 5 * s;
+                    parts.weapon.position.x = Math.cos(t * 1.2) * orbRadius;
+                    parts.weapon.position.z = Math.sin(t * 1.2) * orbRadius;
+                    parts.weapon.position.y = 16 * s + Math.sin(t * 2) * 1.5;
+                    // Orb glow pulse
+                    if (parts.weapon.material) {
+                        parts.weapon.material.emissiveIntensity = 0.7 + Math.sin(t * 3) * 0.3;
+                    }
+                }
+                break;
+            }
+            case 'dragon': {
+                // Dragon: wing flapping, head sway, tail swing, breathing
+                // Wing flapping (slow, majestic)
+                if (parts.wings) {
+                    parts.wings.forEach((wing, i) => {
+                        const side = i === 0 ? -1 : 1;
+                        wing.rotation.z = Math.sin(t * 0.8) * 0.25 * side;
+                        wing.rotation.x = Math.cos(t * 0.6) * 0.1;
+                    });
+                }
+                // Head sway
+                if (parts.head) {
+                    parts.head.rotation.z = Math.sin(t * 0.5) * 0.08;
+                    parts.head.position.y = 20 + Math.sin(t * 0.7) * 0.5;
+                }
+                // Tail swing
+                if (parts.tail) {
+                    parts.tail.rotation.y = Math.sin(t * 0.6) * 0.3;
+                    parts.tail.rotation.z = Math.cos(t * 0.4) * 0.1;
+                }
+                // Body breathing
+                if (parts.torso) {
+                    parts.torso.scale.x = 1 + Math.sin(t * 1.0) * 0.02;
+                    parts.torso.scale.z = 1 + Math.sin(t * 1.0) * 0.02;
+                }
+                // Hover bob
+                e.model.position.y = 2 + Math.sin(t * 0.5) * 1.5;
+                break;
+            }
+            case 'kraken': {
+                // Kraken: tentacles wave in sine patterns, body pulses
+                if (parts.tentacles) {
+                    parts.tentacles.forEach((tent, i) => {
+                        const a = tent.userData.tentacleAngle || (i / 8) * Math.PI * 2;
+                        const phase = t + i * 0.8;
+                        tent.rotation.x = Math.cos(a) * 0.4 + Math.sin(phase * 0.7) * 0.25;
+                        tent.rotation.z = Math.sin(a) * 0.4 + Math.cos(phase * 0.5) * 0.2;
+                        // Tentacle reach in/out
+                        tent.position.y = 4 + Math.sin(phase * 0.9) * 1.5;
+                    });
+                }
+                // Body pulse
+                if (parts.torso) {
+                    const pulse = 1 + Math.sin(t * 0.8) * 0.04;
+                    parts.torso.scale.set(pulse, pulse * 0.95, pulse);
+                }
+                // Gentle bob
+                e.model.position.y = Math.sin(t * 0.6) * 1;
+                break;
+            }
+        }
+    }
+
+    _animateMobChase(e, parts, type, t, dt, dist) {
+        const s = e.def.isBoss ? 2.5 : 1;
+
+        switch (type) {
+            case 'slime': {
+                // Slime: aggressive bouncing — faster, higher, more squash
+                const bounce = Math.sin(t * 3);
+                if (parts.torso) {
+                    parts.torso.scale.y = 0.6 * (1 - bounce * 0.2); // More extreme squash
+                    parts.torso.scale.x = 1 + bounce * 0.15;
+                    parts.torso.scale.z = 1 + bounce * 0.15;
+                }
+                // Higher jumps when chasing
+                e.model.position.y = Math.max(0, Math.sin(t * 3)) * 6 * s;
+                // Lean toward player
+                e.model.rotation.x = 0.15;
+                break;
+            }
+            case 'skeleton': {
+                // Skeleton: aggressive run — arms flailing, head locked on player
+                if (parts.head) {
+                    parts.head.rotation.y = 0; // Lock onto player
+                    parts.head.rotation.z = Math.sin(t * 5) * 0.04;
+                }
+                // Torso forward lean
+                if (parts.torso) {
+                    parts.torso.rotation.x = 0.15;
+                    parts.torso.rotation.z = Math.sin(t * 3) * 0.06;
+                }
+                // Running legs
+                if (parts.legRight) parts.legRight.rotation.x = Math.sin(t * 4) * 0.5;
+                if (parts.legLeft) parts.legLeft.rotation.x = Math.sin(t * 4 + Math.PI) * 0.5;
+                // Sword arm raised
+                if (parts.armRight) {
+                    parts.armRight.rotation.x = -0.5 + Math.sin(t * 2) * 0.2;
+                    parts.armRight.rotation.z = 0.3;
+                }
+                if (parts.armLeft) {
+                    parts.armLeft.rotation.x = Math.sin(t * 4 + Math.PI) * 0.3;
+                }
+                // Running bob
+                e.model.position.y = Math.abs(Math.sin(t * 4)) * 1.5;
+                break;
+            }
+            case 'wolf': {
+                // Wolf: galloping with full leg cycle, body lunging forward
+                const gallop = t * 3;
+                // Four-leg gallop cycle
+                if (parts.legFR) parts.legFR.rotation.x = Math.sin(gallop) * 0.7;
+                if (parts.legFL) parts.legFL.rotation.x = Math.sin(gallop + 0.3) * 0.7;
+                if (parts.legBR) parts.legBR.rotation.x = Math.sin(gallop + Math.PI) * 0.6;
+                if (parts.legBL) parts.legBL.rotation.x = Math.sin(gallop + Math.PI + 0.3) * 0.6;
+                // Body undulation
+                if (parts.torso) {
+                    parts.torso.rotation.x = Math.sin(gallop * 2) * 0.05; // Body flex
+                }
+                // Head locked on prey, slight bob
+                if (parts.head) {
+                    parts.head.rotation.y = 0;
+                    parts.head.rotation.x = -0.1; // Head down, predatory
+                    parts.head.position.y = 6 * s + Math.sin(gallop * 2) * 0.5;
+                }
+                // Tail straight back when running
+                if (parts.tail) {
+                    parts.tail.rotation.y = Math.sin(gallop) * 0.15;
+                    parts.tail.rotation.z = -0.8; // Tail horizontal
+                }
+                // Galloping bob
+                e.model.position.y = Math.abs(Math.sin(gallop)) * 2;
+                break;
+            }
+            case 'darkmage': {
+                // Dark mage: aggressive levitation, orb glowing bright, leaning forward
+                e.model.position.y = 4 + Math.sin(t * 1.5) * 1.5;
+                // Lean toward player
+                if (parts.torso) {
+                    parts.torso.rotation.x = 0.1;
+                    parts.torso.rotation.z = Math.sin(t * 1) * 0.08;
+                }
+                // Staff arm raised threateningly
+                if (parts.armRight) {
+                    parts.armRight.rotation.x = -0.6 + Math.sin(t * 2) * 0.15;
+                }
+                // Orb circles faster and glows brighter
+                if (parts.weapon) {
+                    const orbRadius = 6 * s;
+                    parts.weapon.position.x = Math.cos(t * 3) * orbRadius;
+                    parts.weapon.position.z = Math.sin(t * 3) * orbRadius;
+                    parts.weapon.position.y = 16 * s + Math.sin(t * 4) * 2;
+                    if (parts.weapon.material) {
+                        parts.weapon.material.emissiveIntensity = 1.2 + Math.sin(t * 5) * 0.5;
+                    }
+                }
+                break;
+            }
+            case 'dragon': {
+                // Dragon: aggressive wing flapping, head lunging
+                if (parts.wings) {
+                    parts.wings.forEach((wing, i) => {
+                        const side = i === 0 ? -1 : 1;
+                        wing.rotation.z = Math.sin(t * 2) * 0.4 * side; // Faster flapping
+                    });
+                }
+                if (parts.head) {
+                    parts.head.rotation.x = Math.PI / 2 - 0.2; // Head forward
+                    if (dist < 60) parts.head.rotation.x = Math.PI / 2 + 0.3; // Lunge!
+                }
+                if (parts.tail) {
+                    parts.tail.rotation.y = Math.sin(t * 1.5) * 0.5;
+                }
+                e.model.position.y = 3 + Math.sin(t * 1.2) * 2;
+                break;
+            }
+            case 'kraken': {
+                // Kraken: tentacles reaching forward aggressively
+                if (parts.tentacles) {
+                    parts.tentacles.forEach((tent, i) => {
+                        const a = tent.userData.tentacleAngle || (i / 8) * Math.PI * 2;
+                        const phase = t + i * 0.5;
+                        // Reach forward toward player
+                        tent.rotation.x = Math.cos(a) * 0.6 + Math.sin(phase * 1.5) * 0.4;
+                        tent.rotation.z = Math.sin(a) * 0.6 + Math.cos(phase * 1.2) * 0.35;
+                        tent.position.y = 3 + Math.sin(phase * 2) * 2;
+                    });
+                }
+                if (parts.torso) {
+                    parts.torso.scale.set(1.05, 0.95, 1.05); // Puffed up aggressive
+                }
+                e.model.position.y = Math.sin(t * 1.0) * 1.5;
+                break;
+            }
+        }
+    }
+
+    _animateMobAttack(e, parts, type, progress) {
+        // progress goes from 1.0 → 0.0
+        const attackPower = Math.pow(progress, 0.5); // Fast start, slow end
+        const s = e.def.isBoss ? 2.5 : 1;
+
+        switch (type) {
+            case 'slime': {
+                // Slime: smash down — stretch up then squash flat
+                if (parts.torso) {
+                    if (progress > 0.6) {
+                        // Wind up — stretch tall
+                        parts.torso.scale.y = 0.6 + (1 - progress) * 0.8;
+                        parts.torso.scale.x = 1 - (1 - progress) * 0.2;
+                    } else {
+                        // Smash down — squash flat
+                        parts.torso.scale.y = 0.3 + progress * 0.3;
+                        parts.torso.scale.x = 1.3 - progress * 0.15;
+                    }
+                }
+                e.model.position.y = progress > 0.6 ? (1 - progress) * 15 : 0;
+                break;
+            }
+            case 'skeleton': {
+                // Skeleton: overhead sword slam
+                if (parts.armRight) {
+                    parts.armRight.rotation.x = -1.2 * attackPower;
+                    parts.armRight.rotation.z = 0.5 * attackPower;
+                }
+                if (parts.weapon) {
+                    parts.weapon.rotation.x = -0.5 * attackPower;
+                }
+                if (parts.torso) {
+                    parts.torso.rotation.x = 0.2 * attackPower;
+                }
+                break;
+            }
+            case 'wolf': {
+                // Wolf: lunge bite — whole body lunges forward
+                const lunge = attackPower * 5;
+                e.model.position.z += Math.cos(e.model.rotation.y) * lunge * 0.1;
+                e.model.position.x += Math.sin(e.model.rotation.y) * lunge * 0.1;
+                if (parts.head) {
+                    parts.head.rotation.x = -0.3 * attackPower; // Snap jaws
+                }
+                if (parts.torso) {
+                    parts.torso.rotation.x = 0.1 * attackPower;
+                }
+                break;
+            }
+            case 'darkmage': {
+                // Dark mage: cast — arm thrust forward, orb flare
+                if (parts.armRight) {
+                    parts.armRight.rotation.x = -1.0 * attackPower;
+                }
+                if (parts.weapon && parts.weapon.material) {
+                    parts.weapon.material.emissiveIntensity = 2.0 * attackPower;
+                    const scale = 1 + attackPower * 0.5;
+                    parts.weapon.scale.setScalar(scale);
+                }
+                break;
+            }
+            case 'dragon': {
+                // Dragon: fire breath — head lunges forward
+                if (parts.head) {
+                    parts.head.position.z = 14 + attackPower * 8;
+                    parts.head.rotation.x = Math.PI / 2 + attackPower * 0.4;
+                }
+                // Wings spread wide
+                if (parts.wings) {
+                    parts.wings.forEach((wing, i) => {
+                        const side = i === 0 ? -1 : 1;
+                        wing.rotation.z = -0.5 * side * attackPower;
+                    });
+                }
+                break;
+            }
+            case 'kraken': {
+                // Kraken: all tentacles slam down
+                if (parts.tentacles) {
+                    parts.tentacles.forEach(tent => {
+                        tent.rotation.x += attackPower * 0.8;
+                        tent.position.y = 4 - attackPower * 6;
+                    });
+                }
+                break;
+            }
+        }
     }
 
     _updateProj(dt) {
