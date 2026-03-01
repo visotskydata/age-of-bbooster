@@ -5,7 +5,6 @@ import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/exam
 import { ShaderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/shaders/FXAAShader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import * as CANNON from 'cannon-es';
 import { dbSync, initRealtime, broadcastAttack, broadcastMobHit, broadcastPlayerHit, broadcastMove } from './core/db.js';
@@ -24,7 +23,7 @@ const PVP_RESPAWN_PROTECTION_MS = 2500;
 const PVP_HIT_COOLDOWN_MS = 220;
 const PVP_DMG_SCALE = 0.85;
 const LOOK_SMOOTH_SPEED = 18;
-const LOOK_SENSITIVITY = 0.0017;
+const LOOK_SENSITIVITY = 0.0022;
 const SYNC_INTERVAL_MS = 140;
 const MOVE_BROADCAST_INTERVAL_MS = 55;
 const REMOTE_POS_SMOOTH_SPEED = 10;
@@ -147,7 +146,7 @@ export class Game3D {
         this.lastSwingAngle = 0;
         this.ragdollParts = []; // Physics-driven debris from dead enemies
         this.mixers = []; // For animation mixers
-        this.loadedModels = {}; // Cache of loaded model assets (GLTF/GLB/FBX)
+        this.loadedModels = {}; // Cache of loaded GLB files
         this.modelSources = JSON.parse(JSON.stringify(MODEL_SOURCES));
         this.classActions = JSON.parse(JSON.stringify(CLASS_ACTIONS));
         this.mobModelMap = { ...DEFAULT_MOB_MODEL_MAP };
@@ -197,14 +196,13 @@ export class Game3D {
 
         await this._loadPremiumManifest();
 
-        const gltfLoader = new GLTFLoader();
-        const fbxLoader = new FBXLoader();
+        const loader = new GLTFLoader();
         for (const [cls, cfg] of Object.entries(this.modelSources)) {
-            let asset = null;
+            let gltf = null;
             let loadedFromUrl = null;
             for (const url of cfg.urls) {
                 try {
-                    asset = await this._loadModelAsset(url, gltfLoader, fbxLoader);
+                    gltf = await loader.loadAsync(url);
                     loadedFromUrl = url;
                     break;
                 } catch (err) {
@@ -212,14 +210,14 @@ export class Game3D {
                 }
             }
 
-            if (!asset?.scene) {
+            if (!gltf) {
                 console.error('Failed to load model for class:', cls);
                 continue;
             }
 
             this.loadedModels[cls] = {
-                asset,
-                scale: this._computeModelScale(asset.scene, cfg.targetHeight || TARGET_MODEL_HEIGHT),
+                gltf,
+                scale: this._computeModelScale(gltf.scene, cfg.targetHeight || TARGET_MODEL_HEIGHT),
                 yawOffset: typeof cfg.yawOffset === 'number'
                     ? cfg.yawOffset
                     : this._defaultModelYawOffset(cls, loadedFromUrl),
@@ -236,23 +234,6 @@ export class Game3D {
         const box = new THREE.Box3().setFromObject(scene);
         const h = Math.max(0.001, box.max.y - box.min.y);
         return targetHeight / h;
-    }
-
-    async _loadModelAsset(url, gltfLoader, fbxLoader) {
-        const cleanUrl = String(url || '').split('?')[0].toLowerCase();
-        if (cleanUrl.endsWith('.fbx')) {
-            const scene = await fbxLoader.loadAsync(url);
-            return {
-                scene,
-                animations: Array.isArray(scene?.animations) ? scene.animations : [],
-            };
-        }
-
-        const gltf = await gltfLoader.loadAsync(url);
-        return {
-            scene: gltf.scene,
-            animations: Array.isArray(gltf?.animations) ? gltf.animations : [],
-        };
     }
 
     _defaultModelYawOffset(cls, loadedFromUrl) {
@@ -1122,11 +1103,11 @@ export class Game3D {
     _charModel(cls) {
         const g = new THREE.Group();
         const entry = this.loadedModels[cls] || this.loadedModels['warrior'];
-        const asset = entry?.asset;
+        const gltf = entry?.gltf;
 
-        if (asset?.scene) {
+        if (gltf) {
             // Clone so multiple players/enemies can share the same base mesh
-            const model = SkeletonUtils.clone(asset.scene);
+            const model = SkeletonUtils.clone(gltf.scene);
             const s = entry?.scale || 6;
             model.scale.set(s, s, s);
             if (entry?.yawOffset) model.rotation.y = entry.yawOffset;
@@ -1163,15 +1144,14 @@ export class Game3D {
             this.mixers.push(mixer);
 
             const animMap = {};
-            const clips = Array.isArray(asset.animations) ? asset.animations : [];
-            clips.forEach(a => { animMap[a.name.toLowerCase()] = a; });
+            gltf.animations.forEach(a => { animMap[a.name.toLowerCase()] = a; });
 
             g.userData.mixer = mixer;
             g.userData.animations = animMap;
             g.userData.currentActionName = 'idle';
 
             // Play idle by default
-            const idleAnim = animMap['idle'] || animMap['standing'] || clips[0];
+            const idleAnim = animMap['idle'] || animMap['standing'] || gltf.animations[0];
             if (idleAnim) {
                 const action = mixer.clipAction(idleAnim);
                 action.play();
@@ -1200,11 +1180,11 @@ export class Game3D {
 
     _createHumanoidMobFromLoaded(modelKey, colorHex, scaleMult = 1, isBoss = false, mobType = null) {
         const entry = this.loadedModels[modelKey];
-        const asset = entry?.asset;
-        if (!asset?.scene) return null;
+        const gltf = entry?.gltf;
+        if (!gltf) return null;
 
         const root = new THREE.Group();
-        const model = SkeletonUtils.clone(asset.scene);
+        const model = SkeletonUtils.clone(gltf.scene);
         const scale = (entry?.scale || 6) * scaleMult * (isBoss ? 1.28 : 1.0);
         model.scale.set(scale, scale, scale);
         if (entry?.yawOffset) model.rotation.y = entry.yawOffset;
@@ -1233,14 +1213,13 @@ export class Game3D {
         const mixer = new THREE.AnimationMixer(model);
         this.mixers.push(mixer);
         const animMap = {};
-        const clips = Array.isArray(asset.animations) ? asset.animations : [];
-        clips.forEach(a => { animMap[a.name.toLowerCase()] = a; });
+        gltf.animations.forEach(a => { animMap[a.name.toLowerCase()] = a; });
         root.userData.mixer = mixer;
         root.userData.animations = animMap;
         root.userData.currentActionName = 'idle';
         root.userData.mobType = mobType || modelKey;
 
-        const idle = animMap['idle'] || animMap['idle_combat'] || animMap['idle_b'] || clips[0];
+        const idle = animMap['idle'] || animMap['idle_combat'] || animMap['idle_b'] || gltf.animations[0];
         if (idle) {
             const action = mixer.clipAction(idle);
             action.play();
@@ -1622,16 +1601,11 @@ export class Game3D {
             this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
             const hasLast = this.lastMousePos.x !== null && this.lastMousePos.y !== null;
-            const hasPointerDelta = Number.isFinite(e.movementX) && Number.isFinite(e.movementY);
-            const dx = hasPointerDelta
-                ? e.movementX
-                : (hasLast ? (e.clientX - this.lastMousePos.x) : 0);
-            const dy = hasPointerDelta
-                ? e.movementY
-                : (hasLast ? (e.clientY - this.lastMousePos.y) : 0);
+            const dx = hasLast ? (e.movementX || (e.clientX - this.lastMousePos.x)) : 0;
+            const dy = hasLast ? (e.movementY || (e.clientY - this.lastMousePos.y)) : 0;
             this.mouseVelocity.x = dx;
             this.mouseVelocity.y = dy;
-            if (Math.abs(dx) > 0.0001) this.mouseTurnDelta += dx;
+            this.mouseTurnDelta += dx;
             this.lastMousePos.x = e.clientX;
             this.lastMousePos.y = e.clientY;
         });
@@ -2963,14 +2937,13 @@ export class Game3D {
 
         if (this.keys['KeyW'] || this.keys['ArrowUp']) forwardAxis += 1;
         if (this.keys['KeyS'] || this.keys['ArrowDown']) forwardAxis -= 1;
-        // FPS strafe mapping: A = left, D = right.
-        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis -= 1;
-        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis += 1;
+        // Natural FPS strafe mapping.
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis += 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis -= 1;
 
         if (!Number.isFinite(this.lookYaw)) this.lookYaw = this.playerModel.rotation.y;
         if (Math.abs(this.mouseTurnDelta) > 0.0001) {
-            const frameTurn = THREE.MathUtils.clamp(this.mouseTurnDelta, -120, 120);
-            this.lookYaw += frameTurn * LOOK_SENSITIVITY;
+            this.lookYaw -= this.mouseTurnDelta * LOOK_SENSITIVITY;
             this.mouseTurnDelta = 0;
         }
         const turnT = 1 - Math.exp(-LOOK_SMOOTH_SPEED * dt);

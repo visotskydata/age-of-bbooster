@@ -2,7 +2,6 @@
   "models": {
     "warrior": {
       "urls": [
-        "assets/models/freepacks/warrior_knight.fbx",
         "assets/models/warrior.glb"
       ],
       "yawOffset": 0,
@@ -10,7 +9,6 @@
     },
     "mage": {
       "urls": [
-        "assets/models/freepacks/mage_wizard.fbx",
         "assets/models/mage.glb"
       ],
       "yawOffset": 0,
@@ -18,7 +16,6 @@
     },
     "archer": {
       "urls": [
-        "assets/models/freepacks/archer_elf.fbx",
         "assets/models/archer.glb"
       ],
       "yawOffset": 0,
@@ -26,7 +23,6 @@
     },
     "skeleton": {
       "urls": [
-        "assets/models/freepacks/mob_skeleton.fbx",
         "assets/models/skeleton.glb"
       ],
       "yawOffset": 0,
@@ -34,62 +30,36 @@
     },
     "darkmage": {
       "urls": [
-        "assets/models/freepacks/mob_darkmage_witch.fbx",
         "assets/models/mage.glb"
       ],
       "yawOffset": 0,
       "targetHeight": 20
-    },
-    "dragon": {
-      "urls": [
-        "assets/models/freepacks/mob_dragon.fbx"
-      ],
-      "yawOffset": 0,
-      "targetHeight": 34
-    },
-    "slime": {
-      "urls": [
-        "assets/models/freepacks/mob_slime.fbx"
-      ],
-      "yawOffset": 0,
-      "targetHeight": 12
     }
   },
   "mobModelMap": {
     "skeleton": "skeleton",
-    "darkmage": "darkmage",
-    "dragon": "dragon",
-    "slime": "slime"
+    "darkmage": "darkmage"
   },
   "classActions": {
     "warrior": {
       "melee": [
         "1h_melee_attack_slice_diagonal",
         "1h_melee_attack_chop",
-        "1h_melee_attack_stab",
-        "attack",
-        "slash",
-        "sword"
+        "1h_melee_attack_stab"
       ]
     },
     "mage": {
       "cast": [
         "spellcast_shoot",
         "spellcast_raise",
-        "spellcasting",
-        "cast",
-        "spell",
-        "attack"
+        "spellcasting"
       ]
     },
     "archer": {
       "cast": [
         "1h_ranged_shoot",
         "1h_ranged_shooting",
-        "throw",
-        "shoot",
-        "bow",
-        "attack"
+        "throw"
       ]
     }
   },
@@ -98,86 +68,38 @@
       "idle": [
         "idle_combat",
         "idle",
-        "idle_b",
-        "standing"
+        "idle_b"
       ],
       "run": [
         "running_a",
         "running_b",
-        "running_c",
-        "run"
+        "running_c"
       ],
       "walk": [
         "walking_a",
-        "walking_b",
-        "walk"
+        "walking_b"
       ],
       "attack": [
         "1h_melee_attack_slice_diagonal",
-        "1h_melee_attack_chop",
-        "attack",
-        "slash"
+        "1h_melee_attack_chop"
       ]
     },
     "darkmage": {
       "idle": [
         "idle",
-        "spellcasting",
-        "standing"
+        "spellcasting"
       ],
       "run": [
         "running_a",
-        "running_b",
-        "run"
+        "running_b"
       ],
       "walk": [
         "walking_a",
-        "walking_b",
-        "walk"
+        "walking_b"
       ],
       "attack": [
         "spellcast_shoot",
-        "spellcast_raise",
-        "cast",
-        "spell",
-        "attack"
-      ]
-    },
-    "dragon": {
-      "idle": [
-        "idle",
-        "standing"
-      ],
-      "run": [
-        "run",
-        "fly"
-      ],
-      "walk": [
-        "walk",
-        "run"
-      ],
-      "attack": [
-        "attack",
-        "bite",
-        "claw"
-      ]
-    },
-    "slime": {
-      "idle": [
-        "idle",
-        "bounce"
-      ],
-      "run": [
-        "run",
-        "hop"
-      ],
-      "walk": [
-        "walk",
-        "hop"
-      ],
-      "attack": [
-        "attack",
-        "hit"
+        "spellcast_raise"
       ]
     }
   }
