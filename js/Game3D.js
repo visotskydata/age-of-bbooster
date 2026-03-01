@@ -1583,56 +1583,93 @@ export class Game3D {
     }
 
     _updatePlayer(dt) {
-        let vx = 0, vz = 0;
-        if (this.keys['KeyA'] || this.keys['ArrowLeft']) vx -= 1;
-        if (this.keys['KeyD'] || this.keys['ArrowRight']) vx += 1;
-        if (this.keys['KeyW'] || this.keys['ArrowUp']) vz -= 1;
-        if (this.keys['KeyS'] || this.keys['ArrowDown']) vz += 1;
+        let isMoving = false;
+        let turn = 0;
+        let moveForward = 0;
 
-        let targetAngle = this.playerModel.rotation.y;
-
-        // Relative to camera movement mapping:
-        // When W is pressed, move forward relative to camera
-        const isMoving = !!(vx || vz);
-
-        if (isMoving) {
-            const angle = Math.atan2(vx, vz);
-            targetAngle = angle;
-
-            const spd = this.playerSpeed * dt;
-            this.playerModel.position.x = Math.max(10, Math.min(MAP - 10, this.playerModel.position.x + Math.sin(targetAngle) * spd));
-            this.playerModel.position.z = Math.max(10, Math.min(MAP - 10, this.playerModel.position.z + Math.cos(targetAngle) * spd));
-
-            // Smooth rotation towards target direction
-            this.playerModel.rotation.y += (targetAngle - this.playerModel.rotation.y) * 0.15;
+        // Space to jump
+        if (this.keys['Space'] && !this.user.isJumping) {
+            this.user.isJumping = true;
+            this.user.velocityY = 60; // Jump strength
         }
 
-        // Half Sword Momentum Feel - Just smoothly interpolate scale or height slightly to give weight
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) turn += 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) turn -= 1;
+        if (this.keys['KeyW'] || this.keys['ArrowUp']) moveForward += 1;
+        if (this.keys['KeyS'] || this.keys['ArrowDown']) moveForward -= 0.6; // Backward is slower
+
+        // Turn character
+        if (turn !== 0) {
+            this.playerModel.rotation.y += turn * 4.0 * dt;
+            isMoving = true; // turning counts as movement for animation purposes if needed, but usually we just want walk if moving forward
+        }
+
+        // Move character forward/backward
+        if (moveForward !== 0) {
+            isMoving = true;
+            const spd = this.playerSpeed * dt * moveForward;
+            this.playerModel.position.x += Math.sin(this.playerModel.rotation.y) * spd;
+            this.playerModel.position.z += Math.cos(this.playerModel.rotation.y) * spd;
+        }
+
+        // Boundary constraints
+        this.playerModel.position.x = Math.max(10, Math.min(MAP - 10, this.playerModel.position.x));
+        this.playerModel.position.z = Math.max(10, Math.min(MAP - 10, this.playerModel.position.z));
+
+        // Apply gravity and jumping
+        if (this.user.isJumping) {
+            this.playerModel.position.y += this.user.velocityY * dt;
+            this.user.velocityY -= 180 * dt; // Gravity
+            if (this.playerModel.position.y <= 0) {
+                this.playerModel.position.y = 0;
+                this.user.isJumping = false;
+                this.user.velocityY = 0;
+            }
+        } else {
+            this.playerModel.position.y = 0;
+        }
+
+        // Momentum Feel (Optional scaling or bouncing)
         if (!this._playerMomentum) this._playerMomentum = 0;
         this._playerMomentum = isMoving ? Math.min(1.0, this._playerMomentum + dt * 3.0) : Math.max(0, this._playerMomentum - dt * 4.0);
 
         // Blending GLTF Animations
         const ud = this.playerModel.userData;
         if (ud.mixer && ud.animations) {
-            const targetAnimName = isMoving ? (this.keys['ShiftLeft'] ? 'run' : 'walk') : 'idle';
-            // KayKit specific names mapping
-            let realAnimName = 'idle';
-            if (isMoving) {
-                realAnimName = (targetAnimName === 'run') ? 'running_a' : 'walking_a';
+            let targetAnimName = 'idle';
+
+            if (this.user.isJumping) {
+                targetAnimName = 'jump';
+            } else if (moveForward > 0) {
+                targetAnimName = this.keys['ShiftLeft'] ? 'run' : 'walk';
+            } else if (moveForward < 0) {
+                targetAnimName = 'walking_backwards';
+            } else if (turn !== 0) {
+                targetAnimName = 'walk'; // Just play walk when turning in place
             }
-            // fallback
+
+            // Map generic names to specific KayKit anim names
+            let realAnimName = targetAnimName;
+            if (targetAnimName === 'jump') realAnimName = 'jump_full_short';
+            if (targetAnimName === 'run') realAnimName = 'running_a';
+            if (targetAnimName === 'walk') realAnimName = 'walking_a';
+
+            // Fallback search
             if (!ud.animations[realAnimName]) {
                 for (let k in ud.animations) {
-                    if (k.includes(targetAnimName)) { realAnimName = k; break; }
+                    if (k.includes(targetAnimName.replace('_', ''))) { realAnimName = k; break; }
                 }
             }
 
+            // Play the targeted animation if changed
             if (ud.currentActionName !== realAnimName && ud.animations[realAnimName]) {
-                const action = ud.mixer.clipAction(ud.animations[realAnimName]);
-                if (ud.currentAction) ud.currentAction.crossFadeTo(action, 0.2, true);
-                action.time = 0;
-                action.play();
-                ud.currentAction = action;
+                const newAction = ud.mixer.clipAction(ud.animations[realAnimName]);
+                newAction.reset();
+                if (ud.currentAction) {
+                    newAction.crossFadeFrom(ud.currentAction, 0.2, true);
+                }
+                newAction.play();
+                ud.currentAction = newAction;
                 ud.currentActionName = realAnimName;
             }
         }
