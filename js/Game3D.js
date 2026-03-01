@@ -38,6 +38,7 @@ const ARENA_CENTER = { x: 1500, z: 1500 };
 const ARENA_DUST_RADIUS = 560;
 const PLAYER_COLLIDER_RADIUS = 11;
 const PLAYER_FOOT_CLEARANCE = 0.26;
+const PREMIUM_MANIFEST_URL = 'assets/premium/manifest.json';
 const CLASS_ACTIONS = {
     warrior: {
         melee: ['1h_melee_attack_slice_diagonal', '1h_melee_attack_chop', '1h_melee_attack_stab'],
@@ -76,6 +77,10 @@ const MODEL_SOURCES = {
             'assets/models/skeleton.glb',
         ],
     },
+};
+const DEFAULT_MOB_MODEL_MAP = {
+    skeleton: 'skeleton',
+    darkmage: 'mage',
 };
 const ARENA_TEXTURES = {
     floorMap: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/hardwood2_diffuse.jpg',
@@ -142,6 +147,11 @@ export class Game3D {
         this.ragdollParts = []; // Physics-driven debris from dead enemies
         this.mixers = []; // For animation mixers
         this.loadedModels = {}; // Cache of loaded GLB files
+        this.modelSources = JSON.parse(JSON.stringify(MODEL_SOURCES));
+        this.classActions = JSON.parse(JSON.stringify(CLASS_ACTIONS));
+        this.mobModelMap = { ...DEFAULT_MOB_MODEL_MAP };
+        this.mobActionMap = {};
+        this.premiumManifest = null;
         this.playerGroundOffset = 0;
         this.isDead = false;
         this.deadUntil = 0;
@@ -184,8 +194,10 @@ export class Game3D {
         loaderUi.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(15,20,30,0.95);z-index:9999;transition: opacity 0.5s;';
         this.container.appendChild(loaderUi);
 
+        await this._loadPremiumManifest();
+
         const loader = new GLTFLoader();
-        for (const [cls, cfg] of Object.entries(MODEL_SOURCES)) {
+        for (const [cls, cfg] of Object.entries(this.modelSources)) {
             let gltf = null;
             let loadedFromUrl = null;
             for (const url of cfg.urls) {
@@ -205,7 +217,7 @@ export class Game3D {
 
             this.loadedModels[cls] = {
                 gltf,
-                scale: this._computeModelScale(gltf.scene, TARGET_MODEL_HEIGHT),
+                scale: this._computeModelScale(gltf.scene, cfg.targetHeight || TARGET_MODEL_HEIGHT),
                 yawOffset: typeof cfg.yawOffset === 'number'
                     ? cfg.yawOffset
                     : this._defaultModelYawOffset(cls, loadedFromUrl),
@@ -229,6 +241,48 @@ export class Game3D {
         // Keep default orientation unless explicitly configured per model.
         if (source.includes('xbot.glb') || source.includes('soldier.glb')) return 0;
         return 0;
+    }
+
+    async _loadPremiumManifest() {
+        try {
+            const response = await fetch(PREMIUM_MANIFEST_URL, { cache: 'no-store' });
+            if (!response.ok) return;
+
+            const manifest = await response.json();
+            this.premiumManifest = manifest;
+
+            if (manifest?.models && typeof manifest.models === 'object') {
+                Object.entries(manifest.models).forEach(([key, cfg]) => {
+                    if (!cfg || !Array.isArray(cfg.urls) || !cfg.urls.length) return;
+                    const base = this.modelSources[key] || { urls: [] };
+                    const mergedUrls = [...cfg.urls, ...(base.urls || [])].filter(Boolean);
+                    const uniqueUrls = [...new Set(mergedUrls)];
+                    this.modelSources[key] = {
+                        ...base,
+                        ...cfg,
+                        urls: uniqueUrls,
+                    };
+                });
+            }
+
+            if (manifest?.classActions && typeof manifest.classActions === 'object') {
+                Object.entries(manifest.classActions).forEach(([cls, cfg]) => {
+                    if (!cfg || typeof cfg !== 'object') return;
+                    const prev = this.classActions[cls] || {};
+                    this.classActions[cls] = { ...prev, ...cfg };
+                });
+            }
+
+            if (manifest?.mobModelMap && typeof manifest.mobModelMap === 'object') {
+                this.mobModelMap = { ...this.mobModelMap, ...manifest.mobModelMap };
+            }
+
+            if (manifest?.mobActions && typeof manifest.mobActions === 'object') {
+                this.mobActionMap = { ...manifest.mobActions };
+            }
+        } catch (err) {
+            console.warn('Premium manifest is not available or invalid:', err?.message || err);
+        }
     }
 
     // =================== ENGINE ===================
@@ -1124,7 +1178,7 @@ export class Game3D {
         return g;
     }
 
-    _createHumanoidMobFromLoaded(modelKey, colorHex, scaleMult = 1, isBoss = false) {
+    _createHumanoidMobFromLoaded(modelKey, colorHex, scaleMult = 1, isBoss = false, mobType = null) {
         const entry = this.loadedModels[modelKey];
         const gltf = entry?.gltf;
         if (!gltf) return null;
@@ -1163,6 +1217,7 @@ export class Game3D {
         root.userData.mixer = mixer;
         root.userData.animations = animMap;
         root.userData.currentActionName = 'idle';
+        root.userData.mobType = mobType || modelKey;
 
         const idle = animMap['idle'] || animMap['idle_combat'] || animMap['idle_b'] || gltf.animations[0];
         if (idle) {
@@ -1176,12 +1231,24 @@ export class Game3D {
     }
 
     _mobModel(type, isBoss) {
+        const mappedKey = this.mobModelMap[type];
+        if (mappedKey) {
+            const fromMap = this._createHumanoidMobFromLoaded(
+                mappedKey,
+                MOB_COLORS[type] || 0xffffff,
+                type === 'darkmage' ? 0.98 : 1.0,
+                isBoss,
+                type
+            );
+            if (fromMap) return fromMap;
+        }
+
         if (type === 'skeleton') {
-            const skel = this._createHumanoidMobFromLoaded('skeleton', MOB_COLORS.skeleton, 1.0, isBoss);
+            const skel = this._createHumanoidMobFromLoaded('skeleton', MOB_COLORS.skeleton, 1.0, isBoss, type);
             if (skel) return skel;
         }
         if (type === 'darkmage') {
-            const mage = this._createHumanoidMobFromLoaded('mage', MOB_COLORS.darkmage, 0.98, isBoss);
+            const mage = this._createHumanoidMobFromLoaded('mage', MOB_COLORS.darkmage, 0.98, isBoss, type);
             if (mage) return mage;
         }
 
@@ -1464,6 +1531,7 @@ export class Game3D {
 
     _spawnMob(def) {
         const model = this._mobModel(def.type, def.isBoss);
+        model.userData.mobType = def.type;
         this._tuneMobAppearance(model, def.type, def.isBoss);
         if (!def.isBoss) {
             const jitter = 0.92 + Math.random() * 0.22;
@@ -1602,9 +1670,10 @@ export class Game3D {
         }
         state.lastSwingTime = now;
         const comboDmg = Math.round(dmg * (1 + state.combo * 0.15));
+        const classActionCfg = this.classActions[cls] || {};
 
         if (cls === 'warrior') {
-            const oneShotMs = this._playOneShotAnim(this.playerModel, CLASS_ACTIONS.warrior.melee, { minLockMs: 220, lockMult: 0.6 });
+            const oneShotMs = this._playOneShotAnim(this.playerModel, classActionCfg.melee || CLASS_ACTIONS.warrior.melee, { minLockMs: 220, lockMult: 0.6 });
             this._swingWeapon(swingDir);
             const impactDelay = oneShotMs > 0 ? Math.min(180, oneShotMs * 0.32) : 0;
             setTimeout(() => {
@@ -1614,14 +1683,14 @@ export class Game3D {
                 this.lastSwingAngle = angle;
             }, impactDelay);
         } else if (cls === 'archer') {
-            const oneShotMs = this._playOneShotAnim(this.playerModel, CLASS_ACTIONS.archer.cast, { minLockMs: 190, lockMult: 0.52 });
+            const oneShotMs = this._playOneShotAnim(this.playerModel, classActionCfg.cast || CLASS_ACTIONS.archer.cast, { minLockMs: 190, lockMult: 0.52 });
             const castDelay = oneShotMs > 0 ? Math.min(240, oneShotMs * 0.45) : 100;
             setTimeout(() => {
                 if (this.isDead) return;
                 this._ranged(attackOrigin, angle, comboDmg, 0x8D6E63, 460, 2200, true);
             }, castDelay);
         } else {
-            const oneShotMs = this._playOneShotAnim(this.playerModel, CLASS_ACTIONS.mage.cast, { minLockMs: 220, lockMult: 0.58 });
+            const oneShotMs = this._playOneShotAnim(this.playerModel, classActionCfg.cast || CLASS_ACTIONS.mage.cast, { minLockMs: 220, lockMult: 0.58 });
             const castDelay = oneShotMs > 0 ? Math.min(280, oneShotMs * 0.48) : 130;
             setTimeout(() => {
                 if (this.isDead) return;
@@ -3075,16 +3144,20 @@ export class Game3D {
             if (action.time < action.getClip().duration * 0.8) return;
         }
 
-        let realName = 'idle';
-        if (target === 'run') realName = 'running_a'; // KayKit specific
-        if (target === 'walk') realName = 'walking_a';
-        if (target === 'attack') realName = '1h_melee_attack_slice_diagonal'; // Or similar
-
-        if (!ud.animations[realName]) {
-            for (let k in ud.animations) {
-                if (k.includes(target)) { realName = k; break; }
-            }
+        const mobType = e?.def?.type || ud.mobType;
+        const cfg = (mobType && this.mobActionMap[mobType]) ? this.mobActionMap[mobType] : null;
+        let candidates = [];
+        if (Array.isArray(cfg?.[target])) candidates = cfg[target];
+        if (!candidates.length) {
+            if (target === 'run') candidates = ['running_a', 'running_b', 'running_c'];
+            else if (target === 'walk') candidates = ['walking_a', 'walking_b', 'walking_c'];
+            else if (target === 'attack') candidates = ['1h_melee_attack_slice_diagonal', '1h_melee_attack_chop', 'spellcast_shoot'];
+            else candidates = [target];
         }
+
+        let realName = this._findAnimKey(ud.animations, candidates);
+        if (!realName) realName = this._findAnimKey(ud.animations, [target, 'idle']);
+        if (!realName) return;
 
         if (ud.currentActionName !== realName && ud.animations[realName]) {
             const action = ud.mixer.clipAction(ud.animations[realName]);
