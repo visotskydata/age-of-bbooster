@@ -4,6 +4,8 @@ import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/
 import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/shaders/FXAAShader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import * as CANNON from 'cannon-es';
 import { dbSync, initRealtime, broadcastAttack, broadcastMobHit } from './core/db.js';
 
@@ -53,17 +55,42 @@ export class Game3D {
         this.hitFreezeUntil = 0;
         this.lastSwingAngle = 0;
         this.ragdollParts = []; // Physics-driven debris from dead enemies
+        this.mixers = []; // For animation mixers
+        this.loadedModels = {}; // Cache of loaded GLB files
 
         this._init();
         this._initPhysics();
         this._world();
         this._createParticles();
         this._createClouds();
-        this._spawnPlayer();
-        this._spawnEnemies();
-        this._input();
-        this._network();
-        this._loop();
+
+        this._loadModels().then(() => {
+            this._spawnPlayer();
+            this._spawnEnemies();
+            this._input();
+            this._network();
+            this._loop();
+        });
+    }
+
+    async _loadModels() {
+        const loaderUi = document.createElement('div');
+        loaderUi.innerHTML = '<h2 style="color:white;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:\"Press Start 2P\", sans-serif;text-shadow: 2px 2px 0 #000;text-align:center;"><span style="font-size:32px">⚔️</span><br/><br/>LOADING 3D MODELS...</h2>';
+        loaderUi.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(15,20,30,0.95);z-index:9999;transition: opacity 0.5s;';
+        this.container.appendChild(loaderUi);
+
+        const loader = new GLTFLoader();
+        const models = ['warrior', 'mage', 'archer', 'skeleton'];
+        for (const m of models) {
+            try {
+                this.loadedModels[m] = await loader.loadAsync(`assets/models/${m}.glb`);
+            } catch (e) {
+                console.error('Failed to load', m, e);
+            }
+        }
+
+        loaderUi.style.opacity = '0';
+        setTimeout(() => this.container.removeChild(loaderUi), 500);
     }
 
     // =================== ENGINE ===================
@@ -469,169 +496,45 @@ export class Game3D {
     // =================== CHARACTERS ===================
     _charModel(cls) {
         const g = new THREE.Group();
-        const clr = CLASS_COLORS[cls] || 0xFFFFFF;
-        const skinColor = 0xFFD5B0;
+        const gltf = this.loadedModels[cls] || this.loadedModels['warrior'];
 
-        // === BODY PARTS (segmented for hit zones & dismemberment) ===
+        if (gltf) {
+            // Clone so multiple players/enemies can share the same base mesh
+            const model = SkeletonUtils.clone(gltf.scene);
+            const s = 6; // scale for KayKit models
+            model.scale.set(s, s, s);
 
-        // Torso
-        const torso = new THREE.Mesh(
-            new THREE.CylinderGeometry(4, 3.5, 10, 8),
-            new THREE.MeshStandardMaterial({ color: clr, roughness: 0.7 })
-        );
-        torso.position.y = 8; torso.castShadow = true;
-        torso.userData.bodyPart = 'torso';
-        g.add(torso);
+            // Setup shadows
+            model.traverse(child => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            g.add(model);
 
-        // Head
-        const head = new THREE.Mesh(
-            new THREE.SphereGeometry(3.2, 8, 6),
-            new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.6 })
-        );
-        head.position.y = 16; head.castShadow = true;
-        head.userData.bodyPart = 'head';
-        g.add(head);
+            const mixer = new THREE.AnimationMixer(model);
+            this.mixers.push(mixer);
 
-        // Eyes
-        [-1.3, 1.3].forEach(ox => {
-            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.5, 4, 4), new THREE.MeshBasicMaterial({ color: 0x111111 }));
-            eye.position.set(ox, 16.2, 2.8);
-            head.add(eye);
-        });
+            const animMap = {};
+            gltf.animations.forEach(a => { animMap[a.name.toLowerCase()] = a; });
 
-        // Left Arm
-        const leftArm = new THREE.Mesh(
-            new THREE.CylinderGeometry(1.2, 1, 8, 6),
-            new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.6 })
-        );
-        leftArm.position.set(-5.5, 9, 0);
-        leftArm.rotation.z = 0.2;
-        leftArm.castShadow = true;
-        leftArm.userData.bodyPart = 'arm_left';
-        g.add(leftArm);
+            g.userData.mixer = mixer;
+            g.userData.animations = animMap;
+            g.userData.currentActionName = 'idle';
 
-        // Right Arm (weapon arm) — on a pivot for swing animation
-        const rightArmPivot = new THREE.Group();
-        rightArmPivot.position.set(5.5, 12, 0);
-        rightArmPivot.userData.isWeaponArm = true;
-        g.add(rightArmPivot);
-
-        const rightArm = new THREE.Mesh(
-            new THREE.CylinderGeometry(1.2, 1, 8, 6),
-            new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.6 })
-        );
-        rightArm.position.y = -3;
-        rightArm.castShadow = true;
-        rightArm.userData.bodyPart = 'arm_right';
-        rightArmPivot.add(rightArm);
-
-        // Left Leg
-        const leftLeg = new THREE.Mesh(
-            new THREE.CylinderGeometry(1.3, 1.1, 8, 6),
-            new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.8 })
-        );
-        leftLeg.position.set(-2, 1.5, 0);
-        leftLeg.castShadow = true;
-        leftLeg.userData.bodyPart = 'leg_left';
-        g.add(leftLeg);
-
-        // Right Leg
-        const rightLeg = new THREE.Mesh(
-            new THREE.CylinderGeometry(1.3, 1.1, 8, 6),
-            new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.8 })
-        );
-        rightLeg.position.set(2, 1.5, 0);
-        rightLeg.castShadow = true;
-        rightLeg.userData.bodyPart = 'leg_right';
-        g.add(rightLeg);
-
-        // === CLASS-SPECIFIC EQUIPMENT ===
-        if (cls === 'warrior') {
-            // Helmet
-            const helmet = new THREE.Mesh(
-                new THREE.SphereGeometry(3.8, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2),
-                new THREE.MeshStandardMaterial({ color: 0x777777, metalness: 0.8, roughness: 0.3 })
-            );
-            helmet.position.y = 16.5; g.add(helmet);
-
-            // Shield on left arm
-            const shield = new THREE.Mesh(
-                new THREE.BoxGeometry(1, 8, 6),
-                new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.6, roughness: 0.4 })
-            );
-            shield.position.set(-7, 9, 0);
-            shield.userData.bodyPart = 'shield';
-            g.add(shield);
-
-            // Sword on weapon arm pivot
-            const sword = new THREE.Mesh(
-                new THREE.BoxGeometry(0.8, 14, 0.4),
-                new THREE.MeshStandardMaterial({ color: 0xCCCCCC, metalness: 0.9, roughness: 0.2 })
-            );
-            sword.position.y = -10;
-            sword.userData.isWeapon = true;
-            sword.userData.weaponType = 'sword';
-            rightArmPivot.add(sword);
-
-            // Sword guard
-            const guard = new THREE.Mesh(
-                new THREE.BoxGeometry(3, 0.6, 1.5),
-                new THREE.MeshStandardMaterial({ color: 0x8D6E63, metalness: 0.5 })
-            );
-            guard.position.y = -3.5;
-            rightArmPivot.add(guard);
-
-        } else if (cls === 'mage') {
-            // Hat
-            const hat = new THREE.Mesh(
-                new THREE.ConeGeometry(4.5, 10, 6),
-                new THREE.MeshStandardMaterial({ color: 0x1A237E, roughness: 0.7 })
-            );
-            hat.position.y = 22; g.add(hat);
-
-            // Staff on weapon arm
-            const staff = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.5, 0.5, 24, 6),
-                new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.8 })
-            );
-            staff.position.y = -8;
-            staff.userData.isWeapon = true;
-            staff.userData.weaponType = 'staff';
-            rightArmPivot.add(staff);
-
-            // Orb on top of staff
-            const orb = new THREE.Mesh(
-                new THREE.SphereGeometry(2, 8, 8),
-                new THREE.MeshStandardMaterial({ color: 0xE040FB, emissive: 0xE040FB, emissiveIntensity: 0.8 })
-            );
-            orb.position.y = -20;
-            rightArmPivot.add(orb);
-
+            // Play idle by default
+            const idleAnim = animMap['idle'] || gltf.animations[0];
+            if (idleAnim) {
+                const action = mixer.clipAction(idleAnim);
+                action.play();
+                g.userData.currentAction = action;
+            }
         } else {
-            // Hood
-            const hood = new THREE.Mesh(
-                new THREE.ConeGeometry(4, 6, 6),
-                new THREE.MeshStandardMaterial({ color: 0x2E7D32, roughness: 0.7 })
-            );
-            hood.position.y = 19; g.add(hood);
-
-            // Bow on weapon arm
-            const bow = new THREE.Mesh(
-                new THREE.TorusGeometry(5, 0.4, 4, 8, Math.PI),
-                new THREE.MeshStandardMaterial({ color: 0x6D4C41, roughness: 0.8 })
-            );
-            bow.position.y = -3;
-            bow.rotation.z = Math.PI / 2;
-            bow.userData.isWeapon = true;
-            bow.userData.weaponType = 'bow';
-            rightArmPivot.add(bow);
-
-            // Quiver on back
-            const quiver = new THREE.Mesh(
-                new THREE.CylinderGeometry(1.5, 1.5, 10, 6),
-                new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.8 })
-            );
-            quiver.position.set(0, 10, -3); g.add(quiver);
+            // Fallback capsule if no GLB
+            const capsule = new THREE.Mesh(new THREE.CapsuleGeometry(3, 10), new THREE.MeshStandardMaterial({ color: 0xFFFFFF }));
+            capsule.position.y = 8;
+            g.add(capsule);
         }
 
         // Shadow disc
@@ -641,8 +544,8 @@ export class Game3D {
         );
         shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.2; g.add(shadow);
 
-        // Store refs for animation
-        g.userData.parts = { torso, head, leftArm, rightArmPivot, leftLeg, rightLeg };
+        // Dummy references for existing logic
+        g.userData.parts = { root: g };
         g.userData.swingState = { active: false, time: 0, direction: 'right', combo: 0 };
 
         return g;
@@ -1035,7 +938,10 @@ export class Game3D {
     _swingWeapon(direction) {
         const parts = this.playerModel.userData.parts;
         if (!parts) return;
-        const pivot = parts.rightArmPivot;
+        // For GLTF models, we'd typically animate bones directly or use a specific animation clip.
+        // For now, this logic assumes a procedural model with a 'rightArmPivot'.
+        // If using GLTF, this would be replaced by playing an attack animation.
+        const pivot = parts.rightArmPivot; // This part might not exist on GLTF models
         const state = this.playerModel.userData.swingState;
         if (state.active) return;
         state.active = true;
@@ -1048,7 +954,7 @@ export class Game3D {
         const arcs = {
             right: { startZ: -0.8, endZ: 1.2, startX: -0.3, endX: 0.3 },
             left: { startZ: 1.2, endZ: -0.8, startX: 0.3, endX: -0.3 },
-            overhead: { startZ: 0, endZ: 0, startX: -1.5, endX: 0.8 },
+            overhead: { startZ: -1.5, endZ: 0.8, startX: -1.5, endX: 0.8 }, // Adjusted for overhead
             thrust: { startZ: 0, endZ: 0, startX: -0.3, endX: 0.6 },
         };
         const arc = arcs[direction] || arcs.right;
@@ -1056,33 +962,39 @@ export class Game3D {
         // Weapon trail
         this._createWeaponTrail(direction);
 
-        const animate = () => {
-            const elapsed = performance.now() - startTime;
-            const t = Math.min(elapsed / duration, 1);
-            // Easing: fast start, slow end
-            const ease = 1 - Math.pow(1 - t, 3);
+        // If pivot exists (for procedural models), animate it
+        if (pivot) {
+            const animate = () => {
+                const elapsed = performance.now() - startTime;
+                const t = Math.min(elapsed / duration, 1);
+                // Easing: fast start, slow end
+                const ease = 1 - Math.pow(1 - t, 3);
 
-            pivot.rotation.z = arc.startZ + (arc.endZ - arc.startZ) * ease;
-            pivot.rotation.x = arc.startX + (arc.endX - arc.startX) * ease;
+                pivot.rotation.z = arc.startZ + (arc.endZ - arc.startZ) * ease;
+                pivot.rotation.x = arc.startX + (arc.endX - arc.startX) * ease;
 
-            if (t < 1) {
-                requestAnimationFrame(animate);
-            } else {
-                // Return to idle
-                const returnStart = performance.now();
-                const returnDur = 200;
-                const endZ = pivot.rotation.z, endX = pivot.rotation.x;
-                const returnAnim = () => {
-                    const rt = Math.min((performance.now() - returnStart) / returnDur, 1);
-                    pivot.rotation.z = endZ * (1 - rt);
-                    pivot.rotation.x = endX * (1 - rt);
-                    if (rt < 1) requestAnimationFrame(returnAnim);
-                    else state.active = false;
-                };
-                returnAnim();
-            }
-        };
-        animate();
+                if (t < 1) {
+                    requestAnimationFrame(animate);
+                } else {
+                    // Return to idle
+                    const returnStart = performance.now();
+                    const returnDur = 200;
+                    const endZ = pivot.rotation.z, endX = pivot.rotation.x;
+                    const returnAnim = () => {
+                        const rt = Math.min((performance.now() - returnStart) / returnDur, 1);
+                        pivot.rotation.z = endZ * (1 - rt);
+                        pivot.rotation.x = endX * (1 - rt);
+                        if (rt < 1) requestAnimationFrame(returnAnim);
+                        else state.active = false;
+                    };
+                    returnAnim();
+                }
+            };
+            animate();
+        } else {
+            // For GLTF models, just set state.active to false after duration
+            setTimeout(() => { state.active = false; }, duration + 200);
+        }
     }
 
     _createWeaponTrail(direction) {
@@ -1119,17 +1031,22 @@ export class Game3D {
         this.isBlocking = true;
         const parts = this.playerModel.userData.parts;
         if (!parts) return;
-        // Raise left arm / shield
-        parts.leftArm.rotation.z = -1.2;
-        parts.leftArm.rotation.x = 0.5;
+        // Raise left arm / shield (for procedural models)
+        if (parts.leftArm) {
+            parts.leftArm.rotation.z = -1.2;
+            parts.leftArm.rotation.x = 0.5;
+        }
     }
 
     _endBlock() {
         this.isBlocking = false;
         const parts = this.playerModel.userData.parts;
         if (!parts) return;
-        parts.leftArm.rotation.z = 0.2;
-        parts.leftArm.rotation.x = 0;
+        // Return left arm (for procedural models)
+        if (parts.leftArm) {
+            parts.leftArm.rotation.z = 0.2;
+            parts.leftArm.rotation.x = 0;
+        }
     }
 
     _melee(pos, angle, dmg, isLocal, swingDir) {
@@ -1612,51 +1529,50 @@ export class Game3D {
                 obj.rotation.x = Math.cos(time * 0.0012 + obj.position.y * 0.5) * 0.02;
             }
         });
-
-        // Directional camera shake decay
-        if (this.shakeIntensity > 0) {
-            this.shakeIntensity *= 0.88;
-            if (this.shakeIntensity < 0.1) this.shakeIntensity = 0;
-            const dirX = Math.sin(this.lastSwingAngle || 0) * 0.6;
-            const dirZ = Math.cos(this.lastSwingAngle || 0) * 0.6;
-            this.shakeOffset.set(
-                (dirX + (Math.random() - 0.5) * 0.4) * this.shakeIntensity,
-                (Math.random() - 0.5) * this.shakeIntensity * 0.3,
-                (dirZ + (Math.random() - 0.5) * 0.4) * this.shakeIntensity
-            );
-        }
     }
 
     // =================== GAME LOOP ===================
     _loop() {
         requestAnimationFrame(() => this._loop());
-        const rawDt = this.clock.getDelta();
+        const dt = Math.min(this.clock.getDelta(), 0.1) * this.timeScale;
         const time = performance.now();
 
-        // Hit freeze — skip updates for hitstop effect
-        if (time < this.hitFreezeUntil) {
-            this.composer.render();
-            return;
-        }
+        if (this.mixers) this.mixers.forEach(m => m.update(dt));
 
-        // Slow-motion recovery
-        if (this.timeScale < 1.0) {
-            this.timeScale = Math.min(1.0, this.timeScale + rawDt * 4);
-        }
-        const dt = rawDt * this.timeScale;
+        if (this.hitFreezeUntil > time) return; // Keep rendering frozen frame
+        if (this.timeScale < 1.0) this.timeScale = Math.min(1.0, this.timeScale + dt * 0.5);
 
         this._updatePlayer(dt);
         this._updateEnemyAI(dt);
         this._updateProj(dt);
-        this._updatePhysics(dt);
         this._updateAmbient(time, dt);
-        this._updateCombatCamera(dt);
-        this._updateCam();
-        this._updateScreenEffects();
+        this._updateCombatVisuals(dt);
+        this._updatePhysics(dt);
 
-        // Sync every 500ms
+        // Third-Person Over-the-Shoulder Camera logic
+        if (this.playerModel) {
+            // Target position: player's back
+            const offset = new THREE.Vector3(0, 40, -100); // Back and up
+            // Apply player's rotation to offset
+            offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.playerModel.rotation.y);
+            const targetCamPos = this.playerModel.position.clone().add(offset);
+
+            // Smoothly move camera
+            this.camera.position.lerp(targetCamPos, 0.1);
+
+            // Look slightly ahead of player (at head height)
+            const lookTarget = this.playerModel.position.clone().add(new THREE.Vector3(0, 15, 0));
+            this.camera.lookAt(lookTarget);
+
+            if (this.shakeIntensity > 0) {
+                this.shakeOffset.set((Math.random() - 0.5) * this.shakeIntensity, (Math.random() - 0.5) * this.shakeIntensity, 0);
+                this.camera.position.add(this.shakeOffset);
+                this.shakeIntensity *= 0.85;
+                if (this.shakeIntensity < 0.1) this.shakeIntensity = 0;
+            }
+        }
+
         if (time - this.lastSync > 500) { this.lastSync = time; this._sync(); }
-
         this.composer.render();
     }
 
@@ -1666,153 +1582,54 @@ export class Game3D {
         if (this.keys['KeyD'] || this.keys['ArrowRight']) vx += 1;
         if (this.keys['KeyW'] || this.keys['ArrowUp']) vz -= 1;
         if (this.keys['KeyS'] || this.keys['ArrowDown']) vz += 1;
-        if (vx && vz) { vx *= 0.707; vz *= 0.707; }
 
-        const spd = this.playerSpeed * dt;
-        this.playerModel.position.x = Math.max(10, Math.min(MAP - 10, this.playerModel.position.x + vx * spd));
-        this.playerModel.position.z = Math.max(10, Math.min(MAP - 10, this.playerModel.position.z + vz * spd));
+        let targetAngle = this.playerModel.rotation.y;
 
-        // Face mouse
-        const target = this._getMouseWorldPos();
-        if (target) {
-            const a = Math.atan2(target.x - this.playerModel.position.x, target.z - this.playerModel.position.z);
-            this.playerModel.rotation.y += (a - this.playerModel.rotation.y) * 0.15;
-        }
-
-        // ===== HALF SWORD STYLE PROCEDURAL ANIMATION =====
-        const parts = this.playerModel.userData.parts;
-        if (!parts) return;
-
-        const now = performance.now();
+        // Relative to camera movement mapping:
+        // When W is pressed, move forward relative to camera
         const isMoving = !!(vx || vz);
-        const cls = this.user.class || 'warrior';
-
-        // Momentum tracking for weight feel
-        if (!this._playerMomentum) this._playerMomentum = 0;
-        if (!this._playerStepPhase) this._playerStepPhase = 0;
-        if (!this._playerBreathPhase) this._playerBreathPhase = 0;
 
         if (isMoving) {
-            // Build up momentum (heavy start, like real body)
-            this._playerMomentum = Math.min(1.0, this._playerMomentum + dt * 3.0);
-            const momentum = this._playerMomentum;
+            const angle = Math.atan2(vx, vz);
+            targetAngle = angle;
 
-            // Step frequency increases with momentum
-            const stepSpeed = 0.006 + momentum * 0.006;
-            this._playerStepPhase += stepSpeed * (now - (this._lastPlayerAnimTime || now));
-            const t = this._playerStepPhase;
+            const spd = this.playerSpeed * dt;
+            this.playerModel.position.x = Math.max(10, Math.min(MAP - 10, this.playerModel.position.x + Math.sin(targetAngle) * spd));
+            this.playerModel.position.z = Math.max(10, Math.min(MAP - 10, this.playerModel.position.z + Math.cos(targetAngle) * spd));
 
-            // === LEGS — heavy footfall, asymmetric like real walking ===
-            const legAmplitude = 0.35 + momentum * 0.35; // Bigger strides at full speed
-            const legSin = Math.sin(t);
-            const legSinOpp = Math.sin(t + Math.PI);
-            // Add "snap" to ground contact — sharper at bottom of stride
-            parts.leftLeg.rotation.x = legSin * legAmplitude + Math.sin(t * 2) * 0.08;
-            parts.rightLeg.rotation.x = legSinOpp * legAmplitude + Math.sin((t + Math.PI) * 2) * 0.08;
-            // Legs also spread slightly
-            parts.leftLeg.rotation.z = -0.02 + Math.abs(legSin) * 0.04;
-            parts.rightLeg.rotation.z = 0.02 - Math.abs(legSinOpp) * 0.04;
-
-            // === BODY BOB — vertical bounce on each footfall ===
-            // Double frequency (each foot hits ground), with impact feel
-            const bob = Math.abs(Math.sin(t)) * 1.0 * momentum;
-            const impact = Math.pow(Math.abs(Math.sin(t)), 3) * 0.4; // Sharp impact
-            this.playerModel.position.y = bob - impact;
-
-            // === TORSO — lean into movement direction + twist ===
-            const leanAmount = 0.06 + momentum * 0.04;
-            parts.torso.rotation.x = leanAmount; // Forward lean
-            parts.torso.rotation.z = Math.sin(t) * 0.04 * momentum; // Side-to-side sway
-            parts.torso.rotation.y = Math.sin(t) * 0.03 * momentum; // Shoulder twist
-
-            // === HEAD — counter-rotation for stabilization (human instinct) ===
-            parts.head.rotation.z = -Math.sin(t) * 0.025 * momentum;
-            parts.head.rotation.x = -leanAmount * 0.3; // Head stays more level
-            // Subtle look-ahead bob
-            parts.head.position.y = 16 + Math.sin(t * 2) * 0.15 * momentum;
-
-            // === LEFT ARM — natural counter-swing to legs ===
-            if (!this.isBlocking) {
-                parts.leftArm.rotation.x = legSinOpp * 0.5 * momentum;
-                parts.leftArm.rotation.z = 0.2 + Math.abs(legSinOpp) * 0.05;
-            }
-
-            // === WEAPON ARM — class-specific ready position while moving ===
-            if (!this.playerModel.userData.swingState.active) {
-                if (cls === 'warrior') {
-                    // Sword slightly raised and ready
-                    parts.rightArmPivot.rotation.x = -0.15 + legSin * 0.05 * momentum;
-                    parts.rightArmPivot.rotation.z = 0.08;
-                } else if (cls === 'mage') {
-                    // Staff held at angle
-                    parts.rightArmPivot.rotation.x = -0.1 + Math.sin(t * 0.7) * 0.03;
-                } else {
-                    // Bow at ready
-                    parts.rightArmPivot.rotation.x = -0.2 + legSin * 0.03 * momentum;
-                }
-            }
-
-        } else {
-            // === IDLE — Half Sword breathing: deep, heavy, alive ===
-            this._playerMomentum *= (1 - dt * 4); // Decelerate momentum
-            if (this._playerMomentum < 0.01) this._playerMomentum = 0;
-            const momentum = this._playerMomentum;
-
-            this._playerBreathPhase += dt * 2.5;
-            const breathT = this._playerBreathPhase;
-
-            // Smooth return for legs (deceleration feel)
-            const decelFactor = 0.85 - momentum * 0.3;
-            parts.leftLeg.rotation.x *= decelFactor;
-            parts.rightLeg.rotation.x *= decelFactor;
-            parts.leftLeg.rotation.z *= 0.9;
-            parts.rightLeg.rotation.z *= 0.9;
-
-            // Body bob slowdown
-            this.playerModel.position.y *= 0.85;
-
-            // === BREATHING — chest rises, arms drift, subtle sway ===
-            const breathDepth = 0.025;
-            const breathCycle = Math.sin(breathT);
-            const breathCycleSlow = Math.sin(breathT * 0.7);
-
-            // Torso breathing — chest expansion
-            parts.torso.rotation.x = breathCycle * breathDepth;
-            parts.torso.scale.y = 1 + breathCycle * 0.012; // Chest expansion
-            parts.torso.rotation.z *= 0.9; // Settle twist
-            parts.torso.rotation.y *= 0.9;
-
-            // Head subtle movement — looking around slightly
-            parts.head.rotation.z = breathCycleSlow * 0.01;
-            parts.head.rotation.y = Math.sin(breathT * 0.3) * 0.015; // Very slow look
-            parts.head.rotation.x = breathCycle * 0.008;
-            parts.head.position.y = 16; // Reset
-
-            // Arms relax
-            if (!this.isBlocking) {
-                parts.leftArm.rotation.x *= 0.88;
-                parts.leftArm.rotation.z = 0.2 + breathCycle * 0.02;
-            }
-
-            // === CLASS-SPECIFIC IDLE ===
-            if (!this.playerModel.userData.swingState.active) {
-                if (cls === 'warrior') {
-                    // Sword resting, slight wrist roll
-                    parts.rightArmPivot.rotation.x *= 0.9;
-                    parts.rightArmPivot.rotation.z = breathCycleSlow * 0.03;
-                } else if (cls === 'mage') {
-                    // Staff gentle sway, orb pulses (handled by emissive elsewhere)
-                    parts.rightArmPivot.rotation.x = Math.sin(breathT * 0.5) * 0.04;
-                    parts.rightArmPivot.rotation.z = Math.cos(breathT * 0.3) * 0.02;
-                } else {
-                    // Archer — bow at rest, slight shift
-                    parts.rightArmPivot.rotation.x *= 0.92;
-                    parts.rightArmPivot.rotation.z = breathCycleSlow * 0.02;
-                }
-            }
+            // Smooth rotation towards target direction
+            this.playerModel.rotation.y += (targetAngle - this.playerModel.rotation.y) * 0.15;
         }
 
-        this._lastPlayerAnimTime = now;
+        // Half Sword Momentum Feel - Just smoothly interpolate scale or height slightly to give weight
+        if (!this._playerMomentum) this._playerMomentum = 0;
+        this._playerMomentum = isMoving ? Math.min(1.0, this._playerMomentum + dt * 3.0) : Math.max(0, this._playerMomentum - dt * 4.0);
+
+        // Blending GLTF Animations
+        const ud = this.playerModel.userData;
+        if (ud.mixer && ud.animations) {
+            const targetAnimName = isMoving ? (this.keys['ShiftLeft'] ? 'run' : 'walk') : 'idle';
+            // KayKit specific names mapping
+            let realAnimName = 'idle';
+            if (isMoving) {
+                realAnimName = (targetAnimName === 'run') ? 'running_a' : 'walking_a';
+            }
+            // fallback
+            if (!ud.animations[realAnimName]) {
+                for (let k in ud.animations) {
+                    if (k.includes(targetAnimName)) { realAnimName = k; break; }
+                }
+            }
+
+            if (ud.currentActionName !== realAnimName && ud.animations[realAnimName]) {
+                const action = ud.mixer.clipAction(ud.animations[realAnimName]);
+                if (ud.currentAction) ud.currentAction.crossFadeTo(action, 0.2, true);
+                action.time = 0;
+                action.play();
+                ud.currentAction = action;
+                ud.currentActionName = realAnimName;
+            }
+        }
 
         // HP bar
         const pct = (this.user.hp || 100) / (this.user.max_hp || 100);
@@ -1848,7 +1665,11 @@ export class Game3D {
                 e.model.rotation.y = a;
 
                 // === CHASE ANIMATIONS PER MOB TYPE ===
-                this._animateMobChase(e, parts, type, t, dt, dist);
+                if (e.model.userData.mixer) {
+                    this._playGLBAnim(e, 'run');
+                } else {
+                    this._animateMobChase(e, parts, type, t, dt, dist);
+                }
 
                 // Melee
                 if (dist < (e.def.isBoss ? 40 : 20) && now - e.lastAtk > 1200) {
@@ -1890,13 +1711,23 @@ export class Game3D {
                 }
 
                 // === IDLE ANIMATIONS PER MOB TYPE ===
-                this._animateMobIdle(e, parts, type, t, dt, isWandering);
+                if (e.model.userData.mixer) {
+                    this._playGLBAnim(e, isWandering ? 'walk' : 'idle');
+                } else {
+                    this._animateMobIdle(e, parts, type, t, dt, isWandering);
+                }
             }
 
             // Attack animation decay
             if (e.attackAnim > 0) {
+                if (e.model.userData.mixer && e.attackAnim === 1.0) {
+                    // Start attack once
+                    this._playGLBAnim(e, 'attack');
+                    // Reset to idle after timeout (will be handled by state below if chasing)
+                } else if (!e.model.userData.mixer) {
+                    this._animateMobAttack(e, parts, type, e.attackAnim);
+                }
                 e.attackAnim = Math.max(0, e.attackAnim - dt * 4);
-                this._animateMobAttack(e, parts, type, e.attackAnim);
             }
 
             // HP bar
@@ -1905,6 +1736,41 @@ export class Game3D {
             e.hpBar.fillMesh.position.x = -e.hpBar.maxW * (1 - pct) / 2;
             e.hpBar.fillMesh.material.color.setHex(pct > 0.5 ? 0x4CAF50 : pct > 0.25 ? 0xFFC107 : 0xFF4B4B);
         });
+    }
+
+    // Helper for GLTF mobs (Skeletons)
+    _playGLBAnim(e, target) {
+        const ud = e.model.userData;
+        if (!ud.animations || !ud.mixer) return;
+
+        // Don't interrupt attack until finished, unless it's over
+        if (ud.currentActionName && ud.currentActionName.includes('attack') && target !== 'attack') {
+            const action = ud.currentAction;
+            // Check if attack is almost done (arbitrary 80% to crossfade smoothly)
+            if (action.time < action.getClip().duration * 0.8) return;
+        }
+
+        let realName = 'idle';
+        if (target === 'run') realName = 'running_a'; // KayKit specific
+        if (target === 'walk') realName = 'walking_a';
+        if (target === 'attack') realName = '1h_melee_attack_slice_diagonal'; // Or similar
+
+        if (!ud.animations[realName]) {
+            for (let k in ud.animations) {
+                if (k.includes(target)) { realName = k; break; }
+            }
+        }
+
+        if (ud.currentActionName !== realName && ud.animations[realName]) {
+            const action = ud.mixer.clipAction(ud.animations[realName]);
+            if (ud.currentAction) {
+                ud.currentAction.crossFadeTo(action, 0.2, true);
+            }
+            action.reset();
+            action.play();
+            ud.currentAction = action;
+            ud.currentActionName = realName;
+        }
     }
 
     // =================== MOB ANIMATIONS (Half Sword Style) ===================
