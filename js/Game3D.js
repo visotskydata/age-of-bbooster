@@ -2690,12 +2690,12 @@ export class Game3D {
         if (this.keys['KeyW'] || this.keys['ArrowUp']) forwardAxis += 1;
         if (this.keys['KeyS'] || this.keys['ArrowDown']) forwardAxis -= 1;
         // Natural FPS strafe mapping.
-        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis -= 1;
-        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis += 1;
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis += 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis -= 1;
 
         if (!Number.isFinite(this.lookYaw)) this.lookYaw = this.playerModel.rotation.y;
         if (Math.abs(this.mouseTurnDelta) > 0.0001) {
-            this.lookYaw += this.mouseTurnDelta * LOOK_SENSITIVITY;
+            this.lookYaw -= this.mouseTurnDelta * LOOK_SENSITIVITY;
             this.mouseTurnDelta = 0;
         }
         const turnT = 1 - Math.exp(-LOOK_SMOOTH_SPEED * dt);
