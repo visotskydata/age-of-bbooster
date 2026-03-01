@@ -215,8 +215,8 @@ export class Game3D {
 
     _defaultModelYawOffset(cls, loadedFromUrl) {
         const source = (loadedFromUrl || '').toLowerCase();
-        if (cls === 'warrior' || cls === 'mage' || cls === 'archer') return Math.PI;
-        if (source.includes('xbot.glb') || source.includes('soldier.glb')) return Math.PI;
+        // Keep default orientation unless explicitly configured per model.
+        if (source.includes('xbot.glb') || source.includes('soldier.glb')) return 0;
         return 0;
     }
 
