@@ -34,18 +34,12 @@ export class UserState {
                 hp: 100,
                 maxHp: 100,
                 hpPercent: 100,
-                xp: 0,
-                xpNeeded: 100,
-                xpPercent: 0,
             };
         }
 
         const hp = this.user.hp || 100;
         const maxHp = this.user.max_hp || 100;
         const level = this.user.level || 1;
-        const xp = this.user.xp || 0;
-        const xpNeeded = level * 100;
-
         return {
             name: this.user.login || 'Player',
             classIcon: CLASS_ICONS[this.user.class] || '❓',
@@ -53,9 +47,6 @@ export class UserState {
             hp,
             maxHp,
             hpPercent: Math.max(0, Math.min(100, (hp / maxHp) * 100)),
-            xp,
-            xpNeeded,
-            xpPercent: Math.max(0, Math.min(100, (xp / xpNeeded) * 100)),
         };
     }
 }

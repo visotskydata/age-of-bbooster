@@ -127,13 +127,16 @@ export const gameChannel = supabase.channel('room-1', {
     },
 });
 
-export function initRealtime(onAttack, onMobHit) {
+export function initRealtime(onAttack, onMobHit, onPlayerHit) {
     gameChannel
         .on('broadcast', { event: 'attack' }, (payload) => {
             if (onAttack) onAttack(payload.payload);
         })
         .on('broadcast', { event: 'mob_hit' }, (payload) => {
             if (onMobHit) onMobHit(payload.payload);
+        })
+        .on('broadcast', { event: 'player_hit' }, (payload) => {
+            if (onPlayerHit) onPlayerHit(payload.payload);
         })
         .subscribe();
 }
@@ -150,6 +153,14 @@ export function broadcastMobHit(hitData) {
     gameChannel.send({
         type: 'broadcast',
         event: 'mob_hit',
+        payload: hitData
+    });
+}
+
+export function broadcastPlayerHit(hitData) {
+    gameChannel.send({
+        type: 'broadcast',
+        event: 'player_hit',
         payload: hitData
     });
 }

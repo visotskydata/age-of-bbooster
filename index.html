@@ -114,10 +114,6 @@
                     <div class="bar-fill" id="hp-fill"></div>
                     <span class="bar-text" id="hp-text">100/100</span>
                 </div>
-                <div class="bar xp-bar">
-                    <div class="bar-fill" id="xp-fill"></div>
-                    <span class="bar-text" id="xp-text">0/100 XP</span>
-                </div>
             </div>
         </div>
 
@@ -125,9 +121,7 @@
         <div id="hud-actions">
             <button class="action-btn" id="btn-chat" title="Чат">💬</button>
             <button class="action-btn" id="btn-emotes" title="Эмоции">😊</button>
-            <button class="action-btn" id="btn-inventory" title="Инвентарь">🎒</button>
             <button class="action-btn" id="btn-stats" title="Персонаж">📊</button>
-            <button class="action-btn" id="btn-quests" title="Квесты">📜</button>
         </div>
 
         <!-- CHAT PANEL -->
@@ -151,26 +145,9 @@
             <button class="emote-btn" data-emote="fire">🔥</button>
         </div>
 
-        <!-- PLAYER INTERACTION -->
-        <div id="player-interact" class="hud-panel glass hidden">
-            <h4 id="interact-name">Player</h4>
-            <div class="interact-buttons">
-                <button class="interact-btn" id="btn-duel">⚔️ Дуэль</button>
-                <button class="interact-btn" id="btn-whisper">💬 Чат</button>
-            </div>
-        </div>
     </div>
 
     <!-- ========== MODALS ========== -->
-    <div id="inventory-modal" class="modal hidden">
-        <div class="modal-content glass">
-            <div class="modal-header">
-                <h3>🎒 Инвентарь</h3>
-                <button class="close-btn" data-close="inventory-modal">✕</button>
-            </div>
-            <div id="inventory-grid"></div>
-        </div>
-    </div>
 
     <div id="stats-modal" class="modal hidden">
         <div class="modal-content glass">
@@ -179,37 +156,6 @@
                 <button class="close-btn" data-close="stats-modal">✕</button>
             </div>
             <div id="stats-content"></div>
-        </div>
-    </div>
-
-    <div id="quest-modal" class="modal hidden">
-        <div class="modal-content glass">
-            <div class="modal-header">
-                <h3>📜 Квесты</h3>
-                <button class="close-btn" data-close="quest-modal">✕</button>
-            </div>
-            <div id="quest-list"></div>
-        </div>
-    </div>
-
-    <div id="duel-modal" class="modal hidden">
-        <div class="modal-content glass">
-            <div class="modal-header">
-                <h3>⚔️ Дуэль</h3>
-                <button class="close-btn" data-close="duel-modal">✕</button>
-            </div>
-            <div id="duel-content"></div>
-        </div>
-    </div>
-
-    <div id="dialog-modal" class="modal hidden">
-        <div class="modal-content glass">
-            <div class="modal-header">
-                <h3 id="dialog-npc-name">NPC</h3>
-                <button class="close-btn" data-close="dialog-modal">✕</button>
-            </div>
-            <p id="dialog-text"></p>
-            <div id="dialog-options"></div>
         </div>
     </div>
 

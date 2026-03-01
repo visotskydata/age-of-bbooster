@@ -7,7 +7,7 @@ import { FXAAShader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import * as CANNON from 'cannon-es';
-import { dbSync, initRealtime, broadcastAttack, broadcastMobHit } from './core/db.js';
+import { dbSync, initRealtime, broadcastAttack, broadcastMobHit, broadcastPlayerHit } from './core/db.js';
 
 // ========== CONSTANTS ==========
 const MAP = 3000;
@@ -15,6 +15,20 @@ const CAM_H = 350, CAM_DIST = 280;
 const CLASS_SPEED = { warrior: 120, mage: 140, archer: 170 };
 const CLASS_ATK_CD = { warrior: 450, mage: 900, archer: 650 };
 const CLASS_DMG = { warrior: 20, mage: 28, archer: 16 };
+const ARENA_MODE = true;
+const PVP_MELEE_RANGE = 24;
+const PVP_RANGED_RANGE = 14;
+const PVP_RESPAWN_MS = 3500;
+const PVP_RESPAWN_PROTECTION_MS = 2500;
+const PVP_HIT_COOLDOWN_MS = 220;
+const PVP_DMG_SCALE = 0.85;
+const ARENA_SPAWNS = [
+    { x: 1500, z: 1500 },
+    { x: 1350, z: 1500 },
+    { x: 1650, z: 1500 },
+    { x: 1500, z: 1350 },
+    { x: 1500, z: 1650 },
+];
 
 // ========== FIXED MOB POSITIONS ==========
 const MOBS = [
@@ -46,6 +60,7 @@ export class Game3D {
         this.enemies = [];
         this.projectiles = [];
         this.others = {};
+        this.remotePlayers = {};
         this.lastAtk = 0;
         this.lastSync = 0;
         this.respawnQ = [];
@@ -57,6 +72,14 @@ export class Game3D {
         this.ragdollParts = []; // Physics-driven debris from dead enemies
         this.mixers = []; // For animation mixers
         this.loadedModels = {}; // Cache of loaded GLB files
+        this.playerGroundOffset = 0;
+        this.isDead = false;
+        this.deadUntil = 0;
+        this.spawnProtectedUntil = performance.now() + PVP_RESPAWN_PROTECTION_MS;
+        this.remoteProtectedUntil = {};
+        this.pvpLastHitSentAt = {};
+        this.processedHitIds = new Set();
+        this.processedHitOrder = [];
 
         this._init();
         this._initPhysics();
@@ -66,7 +89,7 @@ export class Game3D {
 
         this._loadModels().then(() => {
             this._spawnPlayer();
-            this._spawnEnemies();
+            if (!ARENA_MODE) this._spawnEnemies();
             this._input();
             this._network();
             this._loop();
@@ -752,6 +775,7 @@ export class Game3D {
         // Shadow
         const sh = new THREE.Mesh(new THREE.CircleGeometry(6 * s, 8), new THREE.MeshBasicMaterial({ color: 0, transparent: true, opacity: 0.2 }));
         sh.rotation.x = -Math.PI / 2; sh.position.y = 0.1; g.add(sh);
+        sh.userData.ignoreGroundOffset = true;
 
         g.userData.parts = parts;
         return g;
@@ -761,7 +785,10 @@ export class Game3D {
     _spawnPlayer() {
         const cls = this.user.class || 'warrior';
         this.playerModel = this._charModel(cls);
-        this.playerModel.position.set(this.user.x || 1500, 0, this.user.y || 1500);
+        this.playerGroundOffset = this._computeModelGroundOffset(this.playerModel);
+        const startX = this.user.x || 1500;
+        const startZ = this.user.y || 1500;
+        this.playerModel.position.set(startX, this._getPlayerGroundTargetY(startX, startZ), startZ);
         this.scene.add(this.playerModel);
         this.playerSpeed = CLASS_SPEED[cls] || 140;
 
@@ -772,6 +799,29 @@ export class Game3D {
 
         // Name label (CSS2D alternative: create a div)
         this._createLabel(this.user.login, this.playerModel);
+    }
+
+    _computeModelGroundOffset(model) {
+        model.updateMatrixWorld(true);
+        let minY = Infinity;
+
+        model.traverse((node) => {
+            if (!node.isMesh || node.userData?.ignoreGroundOffset) return;
+            if (!node.geometry) return;
+            if (!node.geometry.boundingBox) node.geometry.computeBoundingBox();
+            if (!node.geometry.boundingBox) return;
+
+            const worldBox = node.geometry.boundingBox.clone().applyMatrix4(node.matrixWorld);
+            minY = Math.min(minY, worldBox.min.y);
+        });
+
+        if (!Number.isFinite(minY)) return 0;
+        // Lift model so the lowest point rests on the terrain surface.
+        return Math.max(0, -minY + 0.15);
+    }
+
+    _getPlayerGroundTargetY(x, z) {
+        return this._getTerrainHeight(x, z) + (this.playerGroundOffset || 0);
     }
 
     _createHPBar(w) {
@@ -875,8 +925,10 @@ export class Game3D {
 
     _getMouseWorldPos() {
         this.raycaster.setFromCamera(this.mouse, this.camera);
-        const playerY = this.playerModel ? this.playerModel.position.y : 0;
-        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -playerY);
+        const playerGroundY = this.playerModel
+            ? (this.playerModel.position.y - (this.playerGroundOffset || 0))
+            : 0;
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -playerGroundY);
         const target = new THREE.Vector3();
         this.raycaster.ray.intersectPlane(plane, target);
         return target;
@@ -894,6 +946,7 @@ export class Game3D {
     }
 
     _attack() {
+        if (this.isDead) return;
         const now = performance.now();
         const cls = this.user.class || 'warrior';
         const cd = CLASS_ATK_CD[cls] || 600;
@@ -1089,57 +1142,79 @@ export class Game3D {
         if (isLocal) {
             const sx = pos.x + Math.sin(angle) * 15;
             const sz = pos.z + Math.cos(angle) * 15;
-            this.enemies.forEach(e => {
-                if (!e.alive) return;
-                const d = Math.hypot(e.model.position.x - sx, e.model.position.z - sz);
-                const hitRange = e.def.isBoss ? 40 : 25;
-                if (d < hitRange) {
-                    // === Phase 4: Hit zone detection ===
-                    const hitZone = this._getHitZone(swingDir, e);
-                    const zoneMult = { head: 3.0, torso: 1.0, arm_right: 0.5, arm_left: 0.5, leg_right: 0.7, leg_left: 0.7 };
-                    const zoneDmg = Math.round(dmg * (zoneMult[hitZone] || 1.0));
+            if (!ARENA_MODE) {
+                this.enemies.forEach(e => {
+                    if (!e.alive) return;
+                    const d = Math.hypot(e.model.position.x - sx, e.model.position.z - sz);
+                    const hitRange = e.def.isBoss ? 40 : 25;
+                    if (d < hitRange) {
+                        // === Phase 4: Hit zone detection ===
+                        const hitZone = this._getHitZone(swingDir, e);
+                        const zoneMult = { head: 3.0, torso: 1.0, arm_right: 0.5, arm_left: 0.5, leg_right: 0.7, leg_left: 0.7 };
+                        const zoneDmg = Math.round(dmg * (zoneMult[hitZone] || 1.0));
 
-                    this._dmg(e, zoneDmg, angle, swingDir);
+                        this._dmg(e, zoneDmg, angle, swingDir);
 
-                    // Zone-specific feedback
-                    const zoneColors = { head: '#FF2222', torso: '#FFD700', arm_right: '#FF8800', arm_left: '#FF8800', leg_right: '#FFAA44', leg_left: '#FFAA44' };
-                    const zoneLabels = { head: '💀 HEADSHOT!', arm_right: '✂️ ARM!', arm_left: '✂️ ARM!', leg_right: '🦵 LEG!', leg_left: '🦵 LEG!' };
-                    if (zoneLabels[hitZone]) {
-                        this._floatDmg(e.model.position, zoneLabels[hitZone], zoneColors[hitZone] || '#FFFFFF');
+                        // Zone-specific feedback
+                        const zoneColors = { head: '#FF2222', torso: '#FFD700', arm_right: '#FF8800', arm_left: '#FF8800', leg_right: '#FFAA44', leg_left: '#FFAA44' };
+                        const zoneLabels = { head: '💀 HEADSHOT!', arm_right: '✂️ ARM!', arm_left: '✂️ ARM!', leg_right: '🦵 LEG!', leg_left: '🦵 LEG!' };
+                        if (zoneLabels[hitZone]) {
+                            this._floatDmg(e.model.position, zoneLabels[hitZone], zoneColors[hitZone] || '#FFFFFF');
+                        }
+
+                        // Headshot bonus effects
+                        if (hitZone === 'head') {
+                            this._triggerSlowMo(0.3, 0.1);
+                            this._triggerHitFreeze(100);
+                            this._triggerScreenFlash('#FF4444', 200);
+                            this.shakeIntensity = 10;
+                        } else {
+                            this._triggerHitFreeze(60);
+                            this._triggerScreenFlash('#FFFFFF', 100);
+                            this.shakeIntensity = 5;
+                        }
+                        this.lastSwingAngle = angle;
+
+                        // Physics-based knockback
+                        const kbForce = swingDir === 'overhead' ? 8 : swingDir === 'thrust' ? 12 : 6;
+                        e.model.position.x += Math.sin(angle) * kbForce;
+                        e.model.position.z += Math.cos(angle) * kbForce;
+                        // Stagger effect
+                        e.lastAtk = performance.now() + 300;
+                        // Hit impact
+                        this._hitImpact(e.model.position, swingDir);
+
+                        // === Dismemberment check ===
+                        if (hitZone !== 'torso' && zoneDmg > e.maxHp * 0.2) {
+                            this._dismemberPart(e, hitZone, angle, swingDir);
+                        }
+
+                        // Slow-mo on kills
+                        if (e.hp <= 0 && (swingDir === 'overhead' || swingDir === 'thrust' || hitZone === 'head')) {
+                            this._triggerSlowMo(0.4, 0.15);
+                        }
                     }
+                });
+            }
 
-                    // Headshot bonus effects
-                    if (hitZone === 'head') {
-                        this._triggerSlowMo(0.3, 0.1);
-                        this._triggerHitFreeze(100);
-                        this._triggerScreenFlash('#FF4444', 200);
-                        this.shakeIntensity = 10;
-                    } else {
-                        this._triggerHitFreeze(60);
-                        this._triggerScreenFlash('#FFFFFF', 100);
-                        this.shakeIntensity = 5;
-                    }
-                    this.lastSwingAngle = angle;
+            const forwardX = Math.sin(angle);
+            const forwardZ = Math.cos(angle);
+            Object.entries(this.others).forEach(([rawId, model]) => {
+                const targetId = Number(rawId);
+                const state = this.remotePlayers[targetId];
+                if (!state || state.hp <= 0) return;
 
-                    // Physics-based knockback
-                    const kbForce = swingDir === 'overhead' ? 8 : swingDir === 'thrust' ? 12 : 6;
-                    e.model.position.x += Math.sin(angle) * kbForce;
-                    e.model.position.z += Math.cos(angle) * kbForce;
-                    // Stagger effect
-                    e.lastAtk = performance.now() + 300;
-                    // Hit impact
-                    this._hitImpact(e.model.position, swingDir);
+                const dx = model.position.x - sx;
+                const dz = model.position.z - sz;
+                const dist = Math.hypot(dx, dz);
+                if (dist > PVP_MELEE_RANGE) return;
 
-                    // === Dismemberment check ===
-                    if (hitZone !== 'torso' && zoneDmg > e.maxHp * 0.2) {
-                        this._dismemberPart(e, hitZone, angle, swingDir);
-                    }
+                const n = Math.max(0.001, Math.hypot(dx, dz));
+                const dirDot = (dx / n) * forwardX + (dz / n) * forwardZ;
+                if (dirDot < 0.2) return;
 
-                    // Slow-mo on kills
-                    if (e.hp <= 0 && (swingDir === 'overhead' || swingDir === 'thrust' || hitZone === 'head')) {
-                        this._triggerSlowMo(0.4, 0.15);
-                    }
-                }
+                const dmgAfterArmor = Math.max(1, Math.round(dmg - ((state.defense || 5) * 0.5)));
+                this._emitPlayerHit(targetId, dmgAfterArmor, 'melee', model.position);
             });
         }
     }
@@ -1337,6 +1412,121 @@ export class Game3D {
         });
     }
 
+    _emitPlayerHit(targetId, dmg, type, worldPos) {
+        if (!targetId || targetId === this.user.id) return;
+        const now = performance.now();
+        if ((this.remoteProtectedUntil[targetId] || 0) > now) return;
+
+        const lastSent = this.pvpLastHitSentAt[targetId] || 0;
+        if (now - lastSent < PVP_HIT_COOLDOWN_MS) return;
+        this.pvpLastHitSentAt[targetId] = now;
+
+        const scaledDmg = dmg * PVP_DMG_SCALE;
+        const safeDmg = Math.max(1, Math.round(scaledDmg));
+        const hitId = `${this.user.id}:${targetId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+
+        // Local client-side feedback
+        const targetModel = this.others[targetId];
+        if (targetModel) {
+            this._flashPlayerModel(targetModel);
+            this._floatDmg(targetModel.position, safeDmg, '#FF6B6B');
+        } else if (worldPos) {
+            this._floatDmg(worldPos, safeDmg, '#FF6B6B');
+        }
+
+        const state = this.remotePlayers[targetId];
+        if (state) state.hp = Math.max(0, (state.hp || state.max_hp || 100) - safeDmg);
+
+        broadcastPlayerHit({
+            attackerId: this.user.id,
+            targetId,
+            dmg: safeDmg,
+            type,
+            x: Math.round(worldPos?.x ?? 0),
+            z: Math.round(worldPos?.z ?? 0),
+            at: Date.now(),
+            hitId,
+        });
+    }
+
+    _onPlayerHit(payload) {
+        if (!payload || typeof payload.targetId === 'undefined') return;
+        if (payload.hitId && this.processedHitIds.has(payload.hitId)) return;
+        if (payload.hitId) this._rememberProcessedHit(payload.hitId);
+
+        const targetId = Number(payload.targetId);
+        const dmg = Math.max(1, Math.round(payload.dmg || 0));
+        if (dmg <= 0) return;
+
+        if (targetId === this.user.id) {
+            if (this.isDead) return;
+            if (performance.now() < this.spawnProtectedUntil) return;
+            this.user.hp = Math.max(0, (this.user.hp || 100) - dmg);
+            this._floatDmg(this.playerModel.position, dmg, '#FF4B4B');
+            this._triggerScreenFlash('#FF0000', 180);
+            this._triggerHitFreeze(40);
+            this.shakeIntensity = 4;
+            if (window.updateHUD) window.updateHUD();
+            if (this.user.hp <= 0) this._handleSelfDeath(payload.attackerId);
+            return;
+        }
+
+        // Update visuals for spectators
+        const model = this.others[targetId];
+        if (model) {
+            this._flashPlayerModel(model);
+            this._floatDmg(model.position, dmg, '#FF7070');
+        }
+        const state = this.remotePlayers[targetId];
+        if (state) state.hp = Math.max(0, (state.hp || state.max_hp || 100) - dmg);
+    }
+
+    _rememberProcessedHit(hitId) {
+        this.processedHitIds.add(hitId);
+        this.processedHitOrder.push(hitId);
+        if (this.processedHitOrder.length > 512) {
+            const oldId = this.processedHitOrder.shift();
+            this.processedHitIds.delete(oldId);
+        }
+    }
+
+    _flashPlayerModel(model) {
+        if (!model) return;
+        model.traverse((node) => {
+            if (!node.isMesh || !node.material?.color) return;
+            const original = node.material.color.getHex();
+            node.material.color.setHex(0xFFFFFF);
+            setTimeout(() => {
+                if (node.material?.color) node.material.color.setHex(original);
+            }, 90);
+        });
+    }
+
+    _handleSelfDeath(attackerId) {
+        this.isDead = true;
+        this.deadUntil = performance.now() + PVP_RESPAWN_MS;
+        this.user.hp = 0;
+        if (window.updateHUD) window.updateHUD();
+        this._showNotification(`💀 Тебя убил игрок #${attackerId || '?'}. Возрождение...`);
+    }
+
+    _respawnSelf() {
+        const spawn = ARENA_SPAWNS[Math.floor(Math.random() * ARENA_SPAWNS.length)] || { x: 1500, z: 1500 };
+        this.playerModel.position.x = spawn.x;
+        this.playerModel.position.z = spawn.z;
+        this.playerModel.position.y = this._getPlayerGroundTargetY(spawn.x, spawn.z);
+        this.user.x = Math.round(spawn.x);
+        this.user.y = Math.round(spawn.z);
+        this.user.hp = this.user.max_hp || 100;
+        this.user.velocityY = 0;
+        this.user.isJumping = false;
+        this.isDead = false;
+        this.deadUntil = 0;
+        this.spawnProtectedUntil = performance.now() + PVP_RESPAWN_PROTECTION_MS;
+        if (window.updateHUD) window.updateHUD();
+        this._showNotification('⚔️ Возрождение. 2.5с неуязвимости.');
+    }
+
     _dmg(enemy, amount, hitAngle, swingDir) {
         if (!enemy.alive) return;
         enemy.hp -= amount;
@@ -1462,12 +1652,7 @@ export class Game3D {
 
     // =================== INTERACT ===================
     _interact() {
-        // Simple proximity notification for now
-        const px = this.playerModel.position.x, pz = this.playerModel.position.z;
-        // Check if near village center NPCs
-        if (Math.hypot(px - 1500, pz - 1500) < 100) {
-            this._showNotification('🏠 Добро пожаловать в деревню!');
-        }
+        this._showNotification('⚔️ Arena PvP: бей онлайн-игроков в радиусе удара.');
     }
 
     // =================== NETWORK ===================
@@ -1481,6 +1666,9 @@ export class Game3D {
             (payload) => {
                 const e = this.enemies.find(e => e.def.id === payload.mobId);
                 if (e && e.alive) { e.hp -= payload.dmg; this._flashMob(e); if (e.hp <= 0) this._killMob(e, false); }
+            },
+            (payload) => {
+                this._onPlayerHit(payload);
             }
         );
     }
@@ -1498,22 +1686,40 @@ export class Game3D {
         players.forEach(p => {
             if (p.id === this.user.id) return;
             active.add(p.id);
+            const prev = this.remotePlayers[p.id];
+            this.remotePlayers[p.id] = p;
+            if (!prev) {
+                this.remoteProtectedUntil[p.id] = performance.now() + 1000;
+            } else if ((prev.hp || 0) <= 0 && (p.hp || 0) > 0) {
+                this.remoteProtectedUntil[p.id] = performance.now() + PVP_RESPAWN_PROTECTION_MS;
+            }
+
             if (this.others[p.id]) {
                 const m = this.others[p.id];
                 m.position.x += (p.x - m.position.x) * 0.1;
                 m.position.z += (p.y - m.position.z) * 0.1;
+                const remoteGroundOffset = m.userData.groundOffset || 0;
+                const ty = this._getTerrainHeight(p.x, p.y) + remoteGroundOffset;
+                m.position.y += (ty - m.position.y) * 0.2;
                 const a = Math.atan2(p.x - m.position.x, p.y - m.position.z);
                 if (Math.abs(a) > 0.01) m.rotation.y = a;
             } else {
                 const m = this._charModel(p.class || 'warrior');
-                m.position.set(p.x, 0, p.y);
+                m.userData.groundOffset = this._computeModelGroundOffset(m);
+                m.position.set(p.x, this._getTerrainHeight(p.x, p.y) + (m.userData.groundOffset || 0), p.y);
                 this._createLabel(p.login, m);
                 this.scene.add(m);
                 this.others[p.id] = m;
             }
         });
         Object.keys(this.others).forEach(id => {
-            if (!active.has(parseInt(id))) { this.scene.remove(this.others[id]); delete this.others[id]; }
+            if (!active.has(parseInt(id))) {
+                this.scene.remove(this.others[id]);
+                delete this.others[id];
+                delete this.remotePlayers[id];
+                delete this.remoteProtectedUntil[id];
+                delete this.pvpLastHitSentAt[id];
+            }
         });
     }
 
@@ -1646,9 +1852,15 @@ export class Game3D {
     }
 
     _updatePlayer(dt) {
+        if (this.isDead) {
+            this.playerModel.position.y = this._getPlayerGroundTargetY(this.playerModel.position.x, this.playerModel.position.z);
+            if (performance.now() >= this.deadUntil) this._respawnSelf();
+            return;
+        }
+
         let isMoving = false;
-        let moveX = 0;
-        let moveZ = 0;
+        let forwardAxis = 0;
+        let strafeAxis = 0;
 
         // Space to jump
         if (this.keys['Space'] && !this.user.isJumping) {
@@ -1656,16 +1868,37 @@ export class Game3D {
             this.user.velocityY = 60; // Jump strength
         }
 
-        if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveX -= 1;
-        if (this.keys['KeyD'] || this.keys['ArrowRight']) moveX += 1;
-        if (this.keys['KeyW'] || this.keys['ArrowUp']) moveZ -= 1; // Forward is -Z (into the screen)
-        if (this.keys['KeyS'] || this.keys['ArrowDown']) moveZ += 1;
+        if (this.keys['KeyW'] || this.keys['ArrowUp']) forwardAxis += 1;
+        if (this.keys['KeyS'] || this.keys['ArrowDown']) forwardAxis -= 1;
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis -= 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis += 1;
 
-        if (moveX !== 0 || moveZ !== 0) {
-            isMoving = true;
-            const len = Math.hypot(moveX, moveZ);
+        // Mouse controls look direction.
+        const target = this._getMouseWorldPos();
+        if (target) {
+            const dx = target.x - this.playerModel.position.x;
+            const dz = target.z - this.playerModel.position.z;
+            if (Math.hypot(dx, dz) > 1) {
+                this.playerModel.rotation.y = Math.atan2(dx, dz);
+            }
+        }
+
+        let moveX = 0;
+        let moveZ = 0;
+        if (forwardAxis !== 0 || strafeAxis !== 0) {
+            const rot = this.playerModel.rotation.y;
+            const forwardX = Math.sin(rot);
+            const forwardZ = Math.cos(rot);
+            const rightX = Math.cos(rot);
+            const rightZ = -Math.sin(rot);
+
+            moveX = (forwardX * forwardAxis) + (rightX * strafeAxis);
+            moveZ = (forwardZ * forwardAxis) + (rightZ * strafeAxis);
+            const len = Math.hypot(moveX, moveZ) || 1;
             moveX /= len;
             moveZ /= len;
+
+            isMoving = true;
             const spd = this.playerSpeed * dt * (this.keys['ShiftLeft'] ? 1.5 : 1.0);
             this.playerModel.position.x += moveX * spd;
             this.playerModel.position.z += moveZ * spd;
@@ -1675,18 +1908,7 @@ export class Game3D {
         this.playerModel.position.x = Math.max(10, Math.min(MAP - 10, this.playerModel.position.x));
         this.playerModel.position.z = Math.max(10, Math.min(MAP - 10, this.playerModel.position.z));
 
-        // Get ground height at current position
-        const groundHeight = this._getTerrainHeight(this.playerModel.position.x, this.playerModel.position.z);
-
-        // Turn character to mouse pointer
-        const target = this._getMouseWorldPos();
-        if (target) {
-            const dx = target.x - this.playerModel.position.x;
-            const dz = target.z - this.playerModel.position.z;
-            if (Math.hypot(dx, dz) > 1) {
-                this.playerModel.rotation.y = Math.atan2(dx, dz);
-            }
-        }
+        const groundHeight = this._getPlayerGroundTargetY(this.playerModel.position.x, this.playerModel.position.z);
 
         // Apply gravity and jumping
         if (this.user.isJumping) {
@@ -1713,9 +1935,7 @@ export class Game3D {
             if (this.user.isJumping) {
                 targetAnimName = 'jump';
             } else if (isMoving) {
-                // Calculate movement relative to looking direction
-                const dot = moveX * Math.sin(this.playerModel.rotation.y) + moveZ * Math.cos(this.playerModel.rotation.y);
-                if (dot < -0.3) {
+                if (forwardAxis < -0.2) {
                     targetAnimName = 'walking_backwards';
                 } else {
                     targetAnimName = this.keys['ShiftLeft'] ? 'run' : 'walk';
@@ -1756,6 +1976,7 @@ export class Game3D {
     }
 
     _updateEnemyAI(dt) {
+        if (ARENA_MODE) return;
         const px = this.playerModel.position.x, pz = this.playerModel.position.z;
         const now = performance.now();
 
@@ -2297,14 +2518,35 @@ export class Game3D {
 
             // Hit check
             if (p.isLocal) {
-                for (const e of this.enemies) {
-                    if (!e.alive) continue;
-                    if (Math.hypot(e.model.position.x - p.mesh.position.x, e.model.position.z - p.mesh.position.z) < (e.def.isBoss ? 30 : 15)) {
-                        this._dmg(e, p.dmg);
+                let consumed = false;
+
+                for (const [rawId, model] of Object.entries(this.others)) {
+                    const targetId = Number(rawId);
+                    const state = this.remotePlayers[targetId];
+                    if (!state || state.hp <= 0) continue;
+                    if (Math.hypot(model.position.x - p.mesh.position.x, model.position.z - p.mesh.position.z) < PVP_RANGED_RANGE) {
+                        const dmgAfterArmor = Math.max(1, Math.round((p.dmg || 1) - ((state.defense || 5) * 0.35)));
+                        this._emitPlayerHit(targetId, dmgAfterArmor, 'ranged', model.position);
                         this.scene.remove(p.mesh);
                         this.projectiles.splice(i, 1);
+                        consumed = true;
                         break;
                     }
+                }
+                if (consumed) continue;
+
+                if (!ARENA_MODE) {
+                    for (const e of this.enemies) {
+                        if (!e.alive) continue;
+                        if (Math.hypot(e.model.position.x - p.mesh.position.x, e.model.position.z - p.mesh.position.z) < (e.def.isBoss ? 30 : 15)) {
+                            this._dmg(e, p.dmg);
+                            this.scene.remove(p.mesh);
+                            this.projectiles.splice(i, 1);
+                            consumed = true;
+                            break;
+                        }
+                    }
+                    if (consumed) continue;
                 }
             }
 
@@ -2317,14 +2559,23 @@ export class Game3D {
     }
 
     _updateCombatCamera(dt) {
-        // Detect if enemies are nearby
         const px = this.playerModel.position.x, pz = this.playerModel.position.z;
         let nearestDist = Infinity;
-        this.enemies.forEach(e => {
-            if (!e.alive) return;
-            const d = Math.hypot(e.model.position.x - px, e.model.position.z - pz);
-            if (d < nearestDist) nearestDist = d;
-        });
+
+        if (ARENA_MODE) {
+            Object.entries(this.others).forEach(([rawId, m]) => {
+                const state = this.remotePlayers[Number(rawId)];
+                if (state && state.hp <= 0) return;
+                const d = Math.hypot(m.position.x - px, m.position.z - pz);
+                if (d < nearestDist) nearestDist = d;
+            });
+        } else {
+            this.enemies.forEach(e => {
+                if (!e.alive) return;
+                const d = Math.hypot(e.model.position.x - px, e.model.position.z - pz);
+                if (d < nearestDist) nearestDist = d;
+            });
+        }
 
         const inCombat = nearestDist < 200;
         const targetBlend = inCombat ? 1 : 0;

@@ -7,9 +7,6 @@ export class HUDController {
             { btnId: 'btn-chat', panelId: 'chat-panel' },
             { btnId: 'btn-emotes', panelId: 'emotes-panel' },
             { btnId: 'btn-stats', panelId: 'stats-modal' },
-            // Optional elements (present in legacy layout variants)
-            { btnId: 'btn-inventory', panelId: 'inventory-modal' },
-            { btnId: 'btn-quests', panelId: 'quest-modal' },
         ];
     }
 
@@ -26,9 +23,7 @@ export class HUDController {
         this.setText('hud-class-icon', model.classIcon);
         this.setText('hud-level', `Lv.${model.level}`);
         this.setText('hp-text', `${model.hp}/${model.maxHp}`);
-        this.setText('xp-text', `${model.xp}/${model.xpNeeded} XP`);
         this.setWidth('hp-fill', model.hpPercent);
-        this.setWidth('xp-fill', model.xpPercent);
     }
 
     bindPanelToggles() {
@@ -46,7 +41,6 @@ export class HUDController {
                 btn.classList.add('active');
 
                 if (panelId === 'stats-modal') this.populateStats();
-                if (panelId === 'inventory-modal') this.populateInventory();
             });
         });
     }
@@ -91,20 +85,7 @@ export class HUDController {
             <div class="stats-row"><span class="stats-label">⚔️ Атака</span><span class="stats-value">${user.attack || 10}</span></div>
             <div class="stats-row"><span class="stats-label">🛡️ Защита</span><span class="stats-value">${user.defense || 5}</span></div>
             <div class="stats-row"><span class="stats-label">👟 Скорость</span><span class="stats-value">${user.speed || 200}</span></div>
-            <div class="stats-row"><span class="stats-label">⭐ Опыт</span><span class="stats-value">${user.xp || 0} / ${(user.level || 1) * 100}</span></div>
         `;
-    }
-
-    populateInventory() {
-        const grid = document.getElementById('inventory-grid');
-        if (!grid) return;
-
-        grid.innerHTML = '';
-        for (let i = 0; i < 20; i += 1) {
-            const slot = document.createElement('div');
-            slot.className = 'inv-slot';
-            grid.appendChild(slot);
-        }
     }
 
     setText(id, text) {
