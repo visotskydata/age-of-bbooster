@@ -309,6 +309,13 @@ export class Game3D {
         }
     }
 
+    _getTerrainHeight(x, z) {
+        let h = Math.sin(x * 0.008) * 3 + Math.cos(z * 0.008) * 3;
+        if (x > 2000 && z < 900) h += Math.sin(x * 0.02) * 8 + Math.cos(z * 0.015) * 6; // mountains
+        if (Math.hypot(x - 2500, z - 2500) < 350) h -= 3; // lake depression
+        return h;
+    }
+
     // =================== WORLD ===================
     _world() {
         // Ground with vertex colors for zone blending
@@ -319,9 +326,7 @@ export class Game3D {
         for (let i = 0; i < pos.count; i++) {
             const x = pos.getX(i) + MAP / 2, z = pos.getZ(i) + MAP / 2;
             // Height variation by zone
-            let h = Math.sin(x * 0.008) * 3 + Math.cos(z * 0.008) * 3;
-            if (x > 2000 && z < 900) h += Math.sin(x * 0.02) * 8 + Math.cos(z * 0.015) * 6; // mountains
-            if (Math.hypot(x - 2500, z - 2500) < 350) h -= 3; // lake depression
+            let h = this._getTerrainHeight(x, z);
             pos.setY(i, h);
             // Vertex colors for zone blending
             let r = 0.30, g = 0.55, b = 0.25; // default green
@@ -870,7 +875,8 @@ export class Game3D {
 
     _getMouseWorldPos() {
         this.raycaster.setFromCamera(this.mouse, this.camera);
-        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        const playerY = this.playerModel ? this.playerModel.position.y : 0;
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -playerY);
         const target = new THREE.Vector3();
         this.raycaster.ray.intersectPlane(plane, target);
         return target;
@@ -1397,6 +1403,63 @@ export class Game3D {
         setTimeout(() => { div.style.opacity = '0'; setTimeout(() => div.remove(), 1000); }, 3000);
     }
 
+    // Public API for UI systems (chat/emotes)
+    showSpeechBubble(text) {
+        this._showPlayerPopup(text, {
+            color: '#FFFFFF',
+            background: 'rgba(15, 20, 30, 0.86)',
+            lifetime: 1400,
+        });
+    }
+
+    // Public API for UI systems (chat/emotes)
+    showEmote(emoteText) {
+        this._showPlayerPopup(emoteText, {
+            color: '#FFD700',
+            background: 'rgba(0, 0, 0, 0.78)',
+            lifetime: 1000,
+        });
+    }
+
+    _showPlayerPopup(text, options = {}) {
+        if (!this.playerModel || !text) return;
+
+        const color = options.color || '#FFFFFF';
+        const background = options.background || 'rgba(0,0,0,0.8)';
+        const lifetime = options.lifetime || 1200;
+
+        const worldPos = this.playerModel.position.clone();
+        worldPos.y += 30;
+        const screen = this._worldToScreen(worldPos);
+
+        const div = document.createElement('div');
+        div.textContent = String(text).slice(0, 120);
+        div.style.cssText = [
+            'position:fixed',
+            `left:${screen.x}px`,
+            `top:${screen.y}px`,
+            'transform:translate(-50%,-50%)',
+            `color:${color}`,
+            `background:${background}`,
+            'padding:6px 10px',
+            'border-radius:10px',
+            'font:600 13px Inter, sans-serif',
+            'pointer-events:none',
+            'z-index:9999',
+            'text-shadow:0 1px 2px #000',
+            'white-space:nowrap',
+            'transition:transform 0.6s ease, opacity 0.6s ease',
+        ].join(';');
+
+        document.body.appendChild(div);
+        requestAnimationFrame(() => {
+            div.style.transform = 'translate(-50%,-120%)';
+            div.style.opacity = '0';
+        });
+
+        setTimeout(() => div.remove(), lifetime);
+    }
+
     // =================== INTERACT ===================
     _interact() {
         // Simple proximity notification for now
@@ -1584,8 +1647,8 @@ export class Game3D {
 
     _updatePlayer(dt) {
         let isMoving = false;
-        let turn = 0;
-        let moveForward = 0;
+        let moveX = 0;
+        let moveZ = 0;
 
         // Space to jump
         if (this.keys['Space'] && !this.user.isJumping) {
@@ -1593,40 +1656,49 @@ export class Game3D {
             this.user.velocityY = 60; // Jump strength
         }
 
-        if (this.keys['KeyA'] || this.keys['ArrowLeft']) turn += 1;
-        if (this.keys['KeyD'] || this.keys['ArrowRight']) turn -= 1;
-        if (this.keys['KeyW'] || this.keys['ArrowUp']) moveForward += 1;
-        if (this.keys['KeyS'] || this.keys['ArrowDown']) moveForward -= 0.6; // Backward is slower
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveX -= 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) moveX += 1;
+        if (this.keys['KeyW'] || this.keys['ArrowUp']) moveZ -= 1; // Forward is -Z (into the screen)
+        if (this.keys['KeyS'] || this.keys['ArrowDown']) moveZ += 1;
 
-        // Turn character
-        if (turn !== 0) {
-            this.playerModel.rotation.y += turn * 4.0 * dt;
-            isMoving = true; // turning counts as movement for animation purposes if needed, but usually we just want walk if moving forward
-        }
-
-        // Move character forward/backward
-        if (moveForward !== 0) {
+        if (moveX !== 0 || moveZ !== 0) {
             isMoving = true;
-            const spd = this.playerSpeed * dt * moveForward;
-            this.playerModel.position.x += Math.sin(this.playerModel.rotation.y) * spd;
-            this.playerModel.position.z += Math.cos(this.playerModel.rotation.y) * spd;
+            const len = Math.hypot(moveX, moveZ);
+            moveX /= len;
+            moveZ /= len;
+            const spd = this.playerSpeed * dt * (this.keys['ShiftLeft'] ? 1.5 : 1.0);
+            this.playerModel.position.x += moveX * spd;
+            this.playerModel.position.z += moveZ * spd;
         }
 
         // Boundary constraints
         this.playerModel.position.x = Math.max(10, Math.min(MAP - 10, this.playerModel.position.x));
         this.playerModel.position.z = Math.max(10, Math.min(MAP - 10, this.playerModel.position.z));
 
+        // Get ground height at current position
+        const groundHeight = this._getTerrainHeight(this.playerModel.position.x, this.playerModel.position.z);
+
+        // Turn character to mouse pointer
+        const target = this._getMouseWorldPos();
+        if (target) {
+            const dx = target.x - this.playerModel.position.x;
+            const dz = target.z - this.playerModel.position.z;
+            if (Math.hypot(dx, dz) > 1) {
+                this.playerModel.rotation.y = Math.atan2(dx, dz);
+            }
+        }
+
         // Apply gravity and jumping
         if (this.user.isJumping) {
             this.playerModel.position.y += this.user.velocityY * dt;
             this.user.velocityY -= 180 * dt; // Gravity
-            if (this.playerModel.position.y <= 0) {
-                this.playerModel.position.y = 0;
+            if (this.playerModel.position.y <= groundHeight) {
+                this.playerModel.position.y = groundHeight;
                 this.user.isJumping = false;
                 this.user.velocityY = 0;
             }
         } else {
-            this.playerModel.position.y = 0;
+            this.playerModel.position.y = groundHeight;
         }
 
         // Momentum Feel (Optional scaling or bouncing)
@@ -1640,12 +1712,14 @@ export class Game3D {
 
             if (this.user.isJumping) {
                 targetAnimName = 'jump';
-            } else if (moveForward > 0) {
-                targetAnimName = this.keys['ShiftLeft'] ? 'run' : 'walk';
-            } else if (moveForward < 0) {
-                targetAnimName = 'walking_backwards';
-            } else if (turn !== 0) {
-                targetAnimName = 'walk'; // Just play walk when turning in place
+            } else if (isMoving) {
+                // Calculate movement relative to looking direction
+                const dot = moveX * Math.sin(this.playerModel.rotation.y) + moveZ * Math.cos(this.playerModel.rotation.y);
+                if (dot < -0.3) {
+                    targetAnimName = 'walking_backwards';
+                } else {
+                    targetAnimName = this.keys['ShiftLeft'] ? 'run' : 'walk';
+                }
             }
 
             // Map generic names to specific KayKit anim names
