@@ -7,7 +7,7 @@ import { FXAAShader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import * as CANNON from 'cannon-es';
-import { dbSync, initRealtime, broadcastAttack, broadcastMobHit, broadcastPlayerHit } from './core/db.js';
+import { dbSync, initRealtime, broadcastAttack, broadcastMobHit, broadcastPlayerHit, broadcastMove } from './core/db.js';
 
 // ========== CONSTANTS ==========
 const MAP = 3000;
@@ -25,10 +25,13 @@ const PVP_DMG_SCALE = 0.85;
 const LOOK_SMOOTH_SPEED = 8;
 const LOOK_SENSITIVITY = 0.0022;
 const SYNC_INTERVAL_MS = 140;
+const MOVE_BROADCAST_INTERVAL_MS = 55;
 const REMOTE_POS_SMOOTH_SPEED = 10;
 const REMOTE_ROT_SMOOTH_SPEED = 14;
 const REMOTE_TELEPORT_DIST = 220;
 const REMOTE_IDLE_SPEED = 25;
+const REMOTE_PREDICT_MAX_SEC = 0.14;
+const REMOTE_SPEED_FILTER = 10;
 const TARGET_MODEL_HEIGHT = 20;
 const CLASS_TINT_STRENGTH = 0.16;
 const ARENA_CENTER = { x: 1500, z: 1500 };
@@ -141,6 +144,8 @@ export class Game3D {
         this.arenaColliders = [];
         this.mouseTurnDelta = 0;
         this.lookYaw = 0;
+        this.lastMoveBroadcast = 0;
+        this.localMoveSeq = 0;
 
         this._init();
         this._initPhysics();
@@ -2237,8 +2242,87 @@ export class Game3D {
             },
             (payload) => {
                 this._onPlayerHit(payload);
+            },
+            (payload) => {
+                this._onRemoteMove(payload);
             }
         );
+    }
+
+    _broadcastMovement(now) {
+        if (!this.playerModel || this.isDead) return;
+        if (now - this.lastMoveBroadcast < MOVE_BROADCAST_INTERVAL_MS) return;
+        this.lastMoveBroadcast = now;
+        this.localMoveSeq += 1;
+
+        broadcastMove({
+            id: this.user.id,
+            login: this.user.login,
+            class: this.user.class || 'warrior',
+            hp: this.user.hp || 0,
+            x: Math.round(this.playerModel.position.x * 10) / 10,
+            z: Math.round(this.playerModel.position.z * 10) / 10,
+            yaw: this.playerModel.rotation.y,
+            at: Date.now(),
+            seq: this.localMoveSeq,
+        });
+    }
+
+    _ensureRemotePlayer(remote) {
+        if (!remote || !remote.id) return;
+        if (this.others[remote.id]) return;
+
+        const m = this._charModel(remote.class || 'warrior');
+        m.userData.groundOffset = this._computeModelGroundOffset(m);
+        const x = remote.targetX ?? remote.lastServerX ?? ARENA_CENTER.x;
+        const z = remote.targetZ ?? remote.lastServerZ ?? ARENA_CENTER.z;
+        m.position.set(
+            x,
+            Math.max(this._getTerrainHeight(x, z), this._getArenaFloorHeight(x, z)) + (m.userData.groundOffset || 0),
+            z
+        );
+        if (typeof remote.targetYaw === 'number') m.rotation.y = remote.targetYaw;
+        this._createLabel(remote.login || `Player ${remote.id}`, m);
+        this.scene.add(m);
+        this.others[remote.id] = m;
+    }
+
+    _onRemoteMove(payload) {
+        if (!payload) return;
+        const id = Number(payload.id);
+        if (!id || id === this.user.id) return;
+
+        const now = performance.now();
+        const remote = this.remotePlayers[id] || {};
+        const nextSeq = Number(payload.seq || 0);
+        if (nextSeq && remote.lastMoveSeq && nextSeq <= remote.lastMoveSeq) return;
+        if (nextSeq) remote.lastMoveSeq = nextSeq;
+
+        remote.id = id;
+        remote.login = payload.login || remote.login;
+        remote.class = payload.class || remote.class || 'warrior';
+        remote.hp = typeof payload.hp === 'number' ? payload.hp : remote.hp;
+        remote.max_hp = remote.max_hp || 100;
+        remote.defense = remote.defense || 5;
+
+        const px = Number(payload.x);
+        const pz = Number(payload.z);
+        if (Number.isFinite(px) && Number.isFinite(pz)) {
+            if (typeof remote.targetX === 'number' && typeof remote.targetZ === 'number') {
+                const dt = Math.max(0.016, (now - (remote.lastNetAt || now)) / 1000);
+                remote.velX = (px - remote.targetX) / dt;
+                remote.velZ = (pz - remote.targetZ) / dt;
+            }
+            remote.targetX = px;
+            remote.targetZ = pz;
+            remote.targetY = Math.max(this._getTerrainHeight(px, pz), this._getArenaFloorHeight(px, pz));
+        }
+
+        if (Number.isFinite(payload.yaw)) remote.targetYaw = payload.yaw;
+        remote.lastNetAt = now;
+        remote.lastMoveAt = now;
+        this.remotePlayers[id] = remote;
+        this._ensureRemotePlayer(remote);
     }
 
     async _sync() {
@@ -2257,6 +2341,7 @@ export class Game3D {
 
     _updateOthers(players) {
         const active = new Set();
+        const now = performance.now();
         players.forEach(p => {
             if (p.id === this.user.id) return;
             active.add(p.id);
@@ -2268,16 +2353,22 @@ export class Game3D {
             remote.hp = p.hp;
             remote.max_hp = p.max_hp;
             remote.defense = p.defense;
-            remote.targetX = p.x;
-            remote.targetZ = p.y;
-            remote.targetY = Math.max(this._getTerrainHeight(p.x, p.y), this._getArenaFloorHeight(p.x, p.y));
-            if (typeof remote.lastServerX === 'number' && typeof remote.lastServerZ === 'number') {
+            if (typeof remote.lastServerX === 'number' && typeof remote.lastServerZ === 'number' && typeof remote.lastServerAt === 'number') {
                 const mdx = p.x - remote.lastServerX;
                 const mdz = p.y - remote.lastServerZ;
-                if (Math.hypot(mdx, mdz) > 1) remote.targetYaw = Math.atan2(mdx, mdz);
+                const dtSec = Math.max(0.016, (now - remote.lastServerAt) / 1000);
+                remote.velX = mdx / dtSec;
+                remote.velZ = mdz / dtSec;
+                if (Math.hypot(mdx, mdz) > 0.8) remote.targetYaw = Math.atan2(mdx, mdz);
+            }
+            if ((now - (remote.lastMoveAt || 0)) > 260 || !Number.isFinite(remote.targetX) || !Number.isFinite(remote.targetZ)) {
+                remote.targetX = p.x;
+                remote.targetZ = p.y;
+                remote.targetY = Math.max(this._getTerrainHeight(p.x, p.y), this._getArenaFloorHeight(p.x, p.y));
             }
             remote.lastServerX = p.x;
             remote.lastServerZ = p.y;
+            remote.lastServerAt = now;
             this.remotePlayers[p.id] = remote;
             if (!prev) {
                 this.remoteProtectedUntil[p.id] = performance.now() + 1000;
@@ -2302,7 +2393,10 @@ export class Game3D {
             }
         });
         Object.keys(this.others).forEach(id => {
-            if (!active.has(parseInt(id))) {
+            const rid = parseInt(id);
+            const remote = this.remotePlayers[rid];
+            const keepByRealtime = remote && (now - (remote.lastMoveAt || 0) < 2500);
+            if (!active.has(rid) && !keepByRealtime) {
                 this.scene.remove(this.others[id]);
                 delete this.others[id];
                 delete this.remotePlayers[id];
@@ -2315,15 +2409,22 @@ export class Game3D {
     _updateRemotePlayers(dt) {
         const posT = 1 - Math.exp(-REMOTE_POS_SMOOTH_SPEED * dt);
         const rotT = 1 - Math.exp(-REMOTE_ROT_SMOOTH_SPEED * dt);
+        const now = performance.now();
 
         Object.entries(this.others).forEach(([rawId, model]) => {
             const id = Number(rawId);
             const remote = this.remotePlayers[id];
             if (!remote) return;
 
-            const targetX = remote.targetX ?? model.position.x;
-            const targetZ = remote.targetZ ?? model.position.z;
-            const targetY = (remote.targetY ?? this._getTerrainHeight(targetX, targetZ)) + (model.userData.groundOffset || 0);
+            let targetX = remote.targetX ?? model.position.x;
+            let targetZ = remote.targetZ ?? model.position.z;
+            const hasVelocity = Number.isFinite(remote.velX) && Number.isFinite(remote.velZ);
+            if (hasVelocity && Number.isFinite(remote.lastNetAt)) {
+                const predictSec = Math.min(REMOTE_PREDICT_MAX_SEC, Math.max(0, (now - remote.lastNetAt) / 1000));
+                targetX += remote.velX * predictSec;
+                targetZ += remote.velZ * predictSec;
+            }
+            const targetY = (remote.targetY ?? Math.max(this._getTerrainHeight(targetX, targetZ), this._getArenaFloorHeight(targetX, targetZ))) + (model.userData.groundOffset || 0);
             const dist = Math.hypot(targetX - model.position.x, targetZ - model.position.z);
 
             const prevX = model.position.x;
@@ -2342,7 +2443,12 @@ export class Game3D {
             }
 
             const speed = Math.hypot(model.position.x - prevX, model.position.z - prevZ) / Math.max(dt, 1e-3);
-            const anim = speed > (this.playerSpeed * 1.05) ? 'run' : speed > REMOTE_IDLE_SPEED ? 'walk' : 'idle';
+            remote.filteredSpeed = (remote.filteredSpeed || 0) + (speed - (remote.filteredSpeed || 0)) * (1 - Math.exp(-REMOTE_SPEED_FILTER * dt));
+            const anim = remote.filteredSpeed > (this.playerSpeed * 0.95)
+                ? 'run'
+                : remote.filteredSpeed > REMOTE_IDLE_SPEED
+                    ? 'walk'
+                    : 'idle';
             this._setCharacterAnim(model, anim);
         });
     }
@@ -2544,6 +2650,7 @@ export class Game3D {
             }
         }
 
+        this._broadcastMovement(time);
         if (time - this.lastSync > SYNC_INTERVAL_MS) { this.lastSync = time; this._sync(); }
         this.composer.render();
     }
