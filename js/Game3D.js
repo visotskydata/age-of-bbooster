@@ -618,7 +618,18 @@ export class Game3D {
         }
         groundGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         groundGeo.computeVertexNormals();
-        const groundMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.0 });
+        const groundTexLoader = new THREE.TextureLoader();
+        const groundAniso = this.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+        const groundMap = this._loadTiledTexture(groundTexLoader, ARENA_TEXTURES.stoneMap, 22, 22, true, groundAniso);
+        const groundBump = this._loadTiledTexture(groundTexLoader, ARENA_TEXTURES.floorBump, 22, 22, false, groundAniso);
+        const groundMat = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            map: groundMap,
+            bumpMap: groundBump,
+            bumpScale: 0.65,
+            roughness: 0.9,
+            metalness: 0.02,
+        });
         const ground = new THREE.Mesh(groundGeo, groundMat);
         ground.position.set(MAP / 2, 0, MAP / 2);
         ground.receiveShadow = true;
@@ -970,77 +981,60 @@ export class Game3D {
     }
 
     _buildArenaOutskirts() {
-        // Main exits from the arena and secondary ring roads.
-        this._path([ARENA_CENTER.x - 430, ARENA_CENTER.z, 260, ARENA_CENTER.z], 30, 0x8B7355);
-        this._path([ARENA_CENTER.x + 430, ARENA_CENTER.z, 2740, ARENA_CENTER.z], 30, 0x8B7355);
-        this._path([ARENA_CENTER.x, ARENA_CENTER.z - 430, ARENA_CENTER.x, 260], 30, 0x8B7355);
-        this._path([ARENA_CENTER.x, ARENA_CENTER.z + 430, ARENA_CENTER.x, 2740], 30, 0x8B7355);
-        this._path([520, 520, 2480, 520], 22, 0x7f674d);
-        this._path([520, 2480, 2480, 2480], 22, 0x7f674d);
-        this._path([520, 520, 520, 2480], 22, 0x7f674d);
-        this._path([2480, 520, 2480, 2480], 22, 0x7f674d);
+        // Lightweight world: high visual impact, low draw-call count.
+        this._path([ARENA_CENTER.x - 430, ARENA_CENTER.z, 260, ARENA_CENTER.z], 26, 0x8B7355);
+        this._path([ARENA_CENTER.x + 430, ARENA_CENTER.z, 2740, ARENA_CENTER.z], 26, 0x8B7355);
+        this._path([ARENA_CENTER.x, ARENA_CENTER.z - 430, ARENA_CENTER.x, 260], 26, 0x8B7355);
+        this._path([ARENA_CENTER.x, ARENA_CENTER.z + 430, ARENA_CENTER.x, 2740], 26, 0x8B7355);
 
-        // Biome tinting + non-flat ground breakup.
-        this._zoneOverlay(520, 520, 760, 700, 0x2f632a, 0.16);
-        this._zoneOverlay(2480, 520, 740, 660, 0x355c2d, 0.15);
-        this._zoneOverlay(520, 2480, 780, 700, 0x467430, 0.14);
-        this._zoneOverlay(2480, 2480, 760, 680, 0x3b6b31, 0.14);
-        this._zoneOverlay(1500, 430, 1180, 380, 0x5f7f4a, 0.1);
-        this._zoneOverlay(1500, 2570, 1180, 380, 0x5c7f47, 0.1);
-        this._scatterGroundDetail(320, 2680, 320, 2680, 260);
+        // Gentle color breakup with minimal geometry.
+        this._zoneOverlay(1500, 1500, 2380, 2380, 0x7f765f, 0.11);
+        this._zoneOverlay(1500, 1500, 1860, 1860, 0x908164, 0.08);
+        this._zoneOverlay(1500, 1500, 1320, 1320, 0x6d775a, 0.08);
 
-        // Dense forests for stealth and cover around the arena.
-        this._scatterTrees(120, 2860, 120, 2860, 260, 0x2f6f31, 'pine', { scaleMin: 1.2, scaleMax: 2.3, arenaBuffer: 730 });
-        this._scatterTrees(120, 2860, 120, 2860, 180, 0x4b8a39, 'oak', { scaleMin: 1.1, scaleMax: 2.1, arenaBuffer: 740 });
-        this._scatterForestCluster(470, 470, 380, 220, 0x2e6b31, 'pine');
-        this._scatterForestCluster(2480, 500, 360, 210, 0x367833, 'oak');
-        this._scatterForestCluster(560, 2460, 400, 230, 0x4f8b35, 'oak');
-        this._scatterForestCluster(2440, 2440, 390, 220, 0x3a7432, 'pine');
-        this._scatterForestCluster(920, 640, 280, 110, 0x2f6f31, 'pine');
-        this._scatterForestCluster(2040, 2360, 300, 120, 0x4d8f38, 'oak');
-
-        // Large natural blockers and silhouettes.
-        this._scatterRocks(120, 2860, 120, 2860, 140, { sizeMin: 6, sizeMax: 18, arenaBuffer: 760 });
-
-        const hamlets = [
-            [420, 1460, 1.45, 0.2],
-            [2580, 1520, 1.55, -0.25],
-            [1500, 380, 1.3, 0],
-            [1500, 2630, 1.3, Math.PI],
-            [760, 760, 1.4, 0.7],
-            [2220, 2240, 1.6, -0.4],
-            [640, 2250, 1.35, 0.5],
-            [2360, 740, 1.4, -0.65],
-            [1020, 2440, 1.28, -0.2],
-            [1980, 560, 1.35, 0.4],
+        // Few, giant landmark trees (~10x player height).
+        const giantTrees = [
+            [420, 520, 'pine', 0x2f6f31, 4.2],
+            [2580, 500, 'oak', 0x4b8a39, 4.6],
+            [520, 2480, 'oak', 0x4f8b35, 4.3],
+            [2460, 2440, 'pine', 0x367833, 4.5],
+            [860, 760, 'pine', 0x2e6b31, 3.9],
+            [2180, 2280, 'oak', 0x3a7432, 4.1],
+            [740, 2180, 'oak', 0x4a8835, 4.0],
+            [2280, 780, 'pine', 0x2f6f31, 4.2],
         ];
-        hamlets.forEach(([x, z, scale, rot]) => this._building(x, z, scale, rot));
+        giantTrees.forEach(([x, z, type, color, scale]) => this._tree(x, z, type, color, scale));
 
-        // Open structures: enterable defensive compounds for PvP/PvE skirmishes.
-        this._addOpenOutpost(820, 1480, 1.2, 0.15);
-        this._addOpenOutpost(2180, 1500, 1.2, -0.22);
-        this._addOpenOutpost(1500, 880, 1.05, Math.PI * 0.5);
-        this._addOpenOutpost(1500, 2120, 1.08, -Math.PI * 0.5);
+        // Few large landmarks.
+        [
+            [420, 1500, 1.85, 0.18],
+            [2580, 1500, 1.9, -0.24],
+            [1500, 420, 1.7, 0],
+            [1500, 2580, 1.7, Math.PI],
+        ].forEach(([x, z, scale, rot]) => this._building(x, z, scale, rot));
 
-        // Perimeter ridges + collision walling, keeps map readable and prevents empty horizon.
-        for (let i = 0; i < 44; i++) {
-            const a = (i / 44) * Math.PI * 2;
-            const r = 1320 + Math.random() * 300;
-            const x = ARENA_CENTER.x + Math.cos(a) * r;
-            const z = ARENA_CENTER.z + Math.sin(a) * r;
-            const h = 95 + Math.random() * 220;
-            const ridgeRadius = 90 + Math.random() * 130;
-            const ridge = new THREE.Mesh(
-                new THREE.ConeGeometry(ridgeRadius, h, 9),
-                new THREE.MeshStandardMaterial({ color: 0x6d675f, roughness: 0.94, metalness: 0.02 })
-            );
-            const rx = Math.max(90, Math.min(MAP - 90, x));
-            const rz = Math.max(90, Math.min(MAP - 90, z));
-            ridge.position.set(rx, this._getTerrainHeight(rx, rz) + (h * 0.5) - 3, rz);
-            ridge.castShadow = true;
-            ridge.receiveShadow = true;
-            this.scene.add(ridge);
-            this._addArenaCircleCollider(rx, rz, ridgeRadius * 0.72);
+        // Impassable mountain walls on map edges (low count, big forms).
+        const rockMat = new THREE.MeshStandardMaterial({ color: 0x675f57, roughness: 0.95, metalness: 0.01 });
+        const placeEdgeMountain = (x, z, radius, height, rot = 0) => {
+            const y = this._getTerrainHeight(x, z);
+            const mountain = new THREE.Mesh(new THREE.ConeGeometry(radius, height, 7), rockMat);
+            mountain.position.set(x, y + (height * 0.5) - 8, z);
+            mountain.rotation.y = rot;
+            mountain.castShadow = false;
+            mountain.receiveShadow = true;
+            this.scene.add(mountain);
+            this._addArenaCircleCollider(x, z, radius * 0.82);
+        };
+
+        for (let i = 0; i < 8; i++) {
+            const z = 220 + i * 360;
+            placeEdgeMountain(120, z, 120 + (i % 3) * 18, 280 + (i % 4) * 36, 0.2);
+            placeEdgeMountain(MAP - 120, z + ((i % 2) ? 25 : -20), 128 + ((i + 1) % 3) * 16, 300 + (i % 4) * 34, -0.2);
+        }
+        for (let i = 0; i < 7; i++) {
+            const x = 320 + i * 360;
+            placeEdgeMountain(x, 120, 122 + (i % 3) * 20, 290 + (i % 4) * 30, 0.1);
+            placeEdgeMountain(x + ((i % 2) ? 20 : -18), MAP - 120, 126 + ((i + 2) % 3) * 14, 310 + (i % 4) * 32, -0.1);
         }
     }
 
