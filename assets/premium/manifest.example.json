@@ -2,6 +2,7 @@
   "models": {
     "warrior": {
       "urls": [
+        "assets/premium/warrior_knight.fbx",
         "assets/premium/warrior_knight.glb"
       ],
       "yawOffset": 0,
@@ -9,6 +10,7 @@
     },
     "mage": {
       "urls": [
+        "assets/premium/mage_master.fbx",
         "assets/premium/mage_master.glb"
       ],
       "yawOffset": 0,
@@ -16,6 +18,7 @@
     },
     "archer": {
       "urls": [
+        "assets/premium/archer_ranger.fbx",
         "assets/premium/archer_ranger.glb"
       ],
       "yawOffset": 0,
@@ -23,6 +26,7 @@
     },
     "skeleton": {
       "urls": [
+        "assets/premium/skeleton_elite.fbx",
         "assets/premium/skeleton_elite.glb"
       ],
       "yawOffset": 0,
@@ -30,6 +34,7 @@
     },
     "darkmage": {
       "urls": [
+        "assets/premium/dark_mage_elite.fbx",
         "assets/premium/dark_mage_elite.glb"
       ],
       "yawOffset": 0,
