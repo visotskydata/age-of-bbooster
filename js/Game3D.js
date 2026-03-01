@@ -38,26 +38,37 @@ const ARENA_CENTER = { x: 1500, z: 1500 };
 const ARENA_DUST_RADIUS = 560;
 const PLAYER_COLLIDER_RADIUS = 11;
 const PLAYER_FOOT_CLEARANCE = 0.26;
+const CLASS_ACTIONS = {
+    warrior: {
+        melee: ['1h_melee_attack_slice_diagonal', '1h_melee_attack_chop', '1h_melee_attack_stab'],
+    },
+    mage: {
+        cast: ['spellcast_shoot', 'spellcast_raise', 'spellcasting'],
+    },
+    archer: {
+        cast: ['1h_ranged_shoot', '1h_ranged_shooting', 'throw'],
+    },
+};
 const MODEL_SOURCES = {
     warrior: {
         urls: [
-            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
-            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
             'assets/models/warrior.glb',
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
         ],
     },
     mage: {
         urls: [
-            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
-            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
             'assets/models/mage.glb',
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
         ],
     },
     archer: {
         urls: [
-            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
-            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
             'assets/models/archer.glb',
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
         ],
     },
     skeleton: {
@@ -1113,7 +1124,67 @@ export class Game3D {
         return g;
     }
 
+    _createHumanoidMobFromLoaded(modelKey, colorHex, scaleMult = 1, isBoss = false) {
+        const entry = this.loadedModels[modelKey];
+        const gltf = entry?.gltf;
+        if (!gltf) return null;
+
+        const root = new THREE.Group();
+        const model = SkeletonUtils.clone(gltf.scene);
+        const scale = (entry?.scale || 6) * scaleMult * (isBoss ? 1.28 : 1.0);
+        model.scale.set(scale, scale, scale);
+        if (entry?.yawOffset) model.rotation.y = entry.yawOffset;
+
+        const tint = new THREE.Color(colorHex);
+        model.traverse((node) => {
+            if (!node.isMesh || !node.material) return;
+            const apply = (material) => {
+                const m = material.clone();
+                if (m.color) m.color.lerp(tint, isBoss ? 0.28 : 0.2);
+                m.roughness = Math.min(0.92, Math.max(0.22, m.roughness ?? 0.64));
+                m.metalness = Math.min(0.25, Math.max(0.0, m.metalness ?? 0.05));
+                if (m.emissive) {
+                    m.emissive.lerp(tint, isBoss ? 0.24 : 0.12);
+                    m.emissiveIntensity = Math.max(m.emissiveIntensity ?? 0, isBoss ? 0.22 : 0.1);
+                }
+                return m;
+            };
+            node.material = Array.isArray(node.material) ? node.material.map(apply) : apply(node.material);
+            node.castShadow = true;
+            node.receiveShadow = true;
+            node.userData.bodyPart = node.userData.bodyPart || 'torso';
+        });
+
+        root.add(model);
+        const mixer = new THREE.AnimationMixer(model);
+        this.mixers.push(mixer);
+        const animMap = {};
+        gltf.animations.forEach(a => { animMap[a.name.toLowerCase()] = a; });
+        root.userData.mixer = mixer;
+        root.userData.animations = animMap;
+        root.userData.currentActionName = 'idle';
+
+        const idle = animMap['idle'] || animMap['idle_combat'] || animMap['idle_b'] || gltf.animations[0];
+        if (idle) {
+            const action = mixer.clipAction(idle);
+            action.play();
+            root.userData.currentAction = action;
+        }
+
+        root.userData.parts = { torso: model };
+        return root;
+    }
+
     _mobModel(type, isBoss) {
+        if (type === 'skeleton') {
+            const skel = this._createHumanoidMobFromLoaded('skeleton', MOB_COLORS.skeleton, 1.0, isBoss);
+            if (skel) return skel;
+        }
+        if (type === 'darkmage') {
+            const mage = this._createHumanoidMobFromLoaded('mage', MOB_COLORS.darkmage, 0.98, isBoss);
+            if (mage) return mage;
+        }
+
         const g = new THREE.Group();
         const c = MOB_COLORS[type] || 0xFF00FF;
         const s = isBoss ? 2.5 : 1;
@@ -1513,6 +1584,7 @@ export class Game3D {
         this.lastAtk = now;
 
         const pos = this.playerModel.position;
+        const attackOrigin = pos.clone();
         const angle = this.playerModel.rotation.y;
         const baseDmg = (this.user.attack || 10) + (CLASS_DMG[cls] || 10);
         const swingDir = this._getSwingDirection();
@@ -1532,17 +1604,29 @@ export class Game3D {
         const comboDmg = Math.round(dmg * (1 + state.combo * 0.15));
 
         if (cls === 'warrior') {
+            const oneShotMs = this._playOneShotAnim(this.playerModel, CLASS_ACTIONS.warrior.melee, { minLockMs: 220, lockMult: 0.6 });
             this._swingWeapon(swingDir);
-            this._melee(pos, angle, comboDmg, true, swingDir);
-            // Camera shake on swing
-            this.shakeIntensity = 2;
-            this.lastSwingAngle = angle;
+            const impactDelay = oneShotMs > 0 ? Math.min(180, oneShotMs * 0.32) : 0;
+            setTimeout(() => {
+                if (this.isDead) return;
+                this._melee(attackOrigin, angle, comboDmg, true, swingDir);
+                this.shakeIntensity = 2;
+                this.lastSwingAngle = angle;
+            }, impactDelay);
         } else if (cls === 'archer') {
-            this._swingWeapon('thrust');
-            this._ranged(pos, angle, comboDmg, 0x8D6E63, 400, 2000, true);
+            const oneShotMs = this._playOneShotAnim(this.playerModel, CLASS_ACTIONS.archer.cast, { minLockMs: 190, lockMult: 0.52 });
+            const castDelay = oneShotMs > 0 ? Math.min(240, oneShotMs * 0.45) : 100;
+            setTimeout(() => {
+                if (this.isDead) return;
+                this._ranged(attackOrigin, angle, comboDmg, 0x8D6E63, 460, 2200, true);
+            }, castDelay);
         } else {
-            this._swingWeapon('thrust');
-            this._ranged(pos, angle, comboDmg, 0xE040FB, 300, 2500, true);
+            const oneShotMs = this._playOneShotAnim(this.playerModel, CLASS_ACTIONS.mage.cast, { minLockMs: 220, lockMult: 0.58 });
+            const castDelay = oneShotMs > 0 ? Math.min(280, oneShotMs * 0.48) : 130;
+            setTimeout(() => {
+                if (this.isDead) return;
+                this._ranged(attackOrigin, angle, comboDmg, 0xE040FB, 350, 2600, true);
+            }, castDelay);
         }
 
         // Show combo indicator
@@ -1950,19 +2034,75 @@ export class Game3D {
     }
 
     _ranged(pos, angle, dmg, color, speed, lifespan, isLocal) {
-        const geo = new THREE.SphereGeometry(1.5, 6, 6);
-        const mat = new THREE.MeshBasicMaterial({ color });
-        const proj = new THREE.Mesh(geo, mat);
+        const proj = new THREE.Group();
+        const projectileType = color === 0xE040FB ? 'mage' : 'archer';
+
+        if (projectileType === 'mage') {
+            const core = new THREE.Mesh(
+                new THREE.IcosahedronGeometry(1.2, 1),
+                new THREE.MeshStandardMaterial({
+                    color: 0xffb5ff,
+                    emissive: 0x8f31d3,
+                    emissiveIntensity: 1.7,
+                    roughness: 0.2,
+                    metalness: 0.08,
+                })
+            );
+            const aura = new THREE.Mesh(
+                new THREE.SphereGeometry(2.3, 12, 10),
+                new THREE.MeshBasicMaterial({
+                    color: 0xe040fb,
+                    transparent: true,
+                    opacity: 0.22,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                })
+            );
+            const ringA = new THREE.Mesh(
+                new THREE.TorusGeometry(2.1, 0.18, 8, 28),
+                new THREE.MeshBasicMaterial({ color: 0xf6d5ff, transparent: true, opacity: 0.5 })
+            );
+            ringA.rotation.x = Math.PI * 0.5;
+            const ringB = ringA.clone();
+            ringB.rotation.y = Math.PI * 0.5;
+            ringB.material = ringA.material.clone();
+            ringB.material.opacity = 0.35;
+            proj.add(core, aura, ringA, ringB);
+            proj.userData.ringA = ringA;
+            proj.userData.ringB = ringB;
+            proj.userData.pulse = Math.random() * Math.PI * 2;
+        } else {
+            const bolt = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.34, 0.48, 6.8, 8),
+                new THREE.MeshStandardMaterial({
+                    color: 0xd5c4a8,
+                    roughness: 0.58,
+                    metalness: 0.12,
+                    emissive: 0x3c2618,
+                    emissiveIntensity: 0.18,
+                })
+            );
+            bolt.rotation.x = Math.PI * 0.5;
+            const tip = new THREE.Mesh(
+                new THREE.ConeGeometry(0.55, 1.7, 6),
+                new THREE.MeshStandardMaterial({ color: 0xc1bdb4, roughness: 0.42, metalness: 0.55 })
+            );
+            tip.position.z = 3.8;
+            tip.rotation.x = Math.PI * 0.5;
+            proj.add(bolt, tip);
+        }
+
         proj.position.set(pos.x + Math.sin(angle) * 10, 8, pos.z + Math.cos(angle) * 10);
+        proj.rotation.y = angle;
         this.scene.add(proj);
 
         // Glow
-        const glow = new THREE.PointLight(color, 2, 40);
+        const glow = new THREE.PointLight(color, projectileType === 'mage' ? 2.2 : 1.2, projectileType === 'mage' ? 56 : 28);
         proj.add(glow);
 
         this.projectiles.push({
             mesh: proj, vx: Math.sin(angle) * speed, vz: Math.cos(angle) * speed,
-            dmg, isLocal, born: performance.now(), life: lifespan
+            dmg, isLocal, born: performance.now(), life: lifespan, type: projectileType
         });
     }
 
@@ -2171,6 +2311,45 @@ export class Game3D {
         next.play();
         ud.currentAction = next;
         ud.currentActionName = realAnimName;
+    }
+
+    _findAnimKey(animations, candidates = []) {
+        if (!animations) return null;
+        for (const raw of candidates) {
+            const key = String(raw || '').toLowerCase();
+            if (animations[key]) return key;
+        }
+        for (const raw of candidates) {
+            const key = String(raw || '').toLowerCase();
+            const found = Object.keys(animations).find(k => k.includes(key));
+            if (found) return found;
+        }
+        return null;
+    }
+
+    _playOneShotAnim(model, candidates, opts = {}) {
+        const ud = model?.userData;
+        if (!ud?.mixer || !ud?.animations) return 0;
+
+        const key = this._findAnimKey(ud.animations, candidates);
+        if (!key) return 0;
+        const clip = ud.animations[key];
+        if (!clip) return 0;
+
+        const action = ud.mixer.clipAction(clip);
+        action.reset();
+        action.enabled = true;
+        action.setLoop(THREE.LoopOnce, 1);
+        action.clampWhenFinished = true;
+        if (ud.currentAction) action.crossFadeFrom(ud.currentAction, opts.fade ?? 0.12, true);
+        action.play();
+        ud.currentAction = action;
+        ud.currentActionName = key;
+
+        const now = performance.now();
+        const durMs = Math.max(120, (clip.duration || 0.4) * 1000);
+        ud.actionLockUntil = now + Math.max(opts.minLockMs || 160, durMs * (opts.lockMult || 0.65));
+        return durMs;
     }
 
     _showNotification(text) {
@@ -2755,18 +2934,21 @@ export class Game3D {
         // Blending GLTF Animations
         const ud = this.playerModel.userData;
         if (ud.mixer && ud.animations) {
-            let targetAnimName = 'idle';
+            const locked = (ud.actionLockUntil || 0) > performance.now();
+            if (!locked) {
+                let targetAnimName = 'idle';
 
-            if (this.user.isJumping) {
-                targetAnimName = 'jump';
-            } else if (isMoving) {
-                if (forwardAxis < -0.2) {
-                    targetAnimName = 'walk';
-                } else {
-                    targetAnimName = this.keys['ShiftLeft'] ? 'run' : 'walk';
+                if (this.user.isJumping) {
+                    targetAnimName = 'jump';
+                } else if (isMoving) {
+                    if (forwardAxis < -0.2) {
+                        targetAnimName = 'walk';
+                    } else {
+                        targetAnimName = this.keys['ShiftLeft'] ? 'run' : 'walk';
+                    }
                 }
+                this._setCharacterAnim(this.playerModel, targetAnimName);
             }
-            this._setCharacterAnim(this.playerModel, targetAnimName);
         }
 
         // HP bar
@@ -3320,6 +3502,15 @@ export class Game3D {
             const p = this.projectiles[i];
             p.mesh.position.x += p.vx * dt;
             p.mesh.position.z += p.vz * dt;
+            if (p.type === 'mage') {
+                const t = (performance.now() - p.born) * 0.001;
+                if (p.mesh.userData.ringA) p.mesh.userData.ringA.rotation.z = t * 6;
+                if (p.mesh.userData.ringB) p.mesh.userData.ringB.rotation.x = t * 5;
+                const pulse = 0.9 + Math.sin(t * 10 + (p.mesh.userData.pulse || 0)) * 0.16;
+                p.mesh.scale.setScalar(pulse);
+            } else {
+                p.mesh.rotation.y = Math.atan2(p.vx, p.vz);
+            }
 
             // Hit check
             if (p.isLocal) {
