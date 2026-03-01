@@ -29,6 +29,38 @@ const REMOTE_POS_SMOOTH_SPEED = 10;
 const REMOTE_ROT_SMOOTH_SPEED = 14;
 const REMOTE_TELEPORT_DIST = 220;
 const REMOTE_IDLE_SPEED = 25;
+const TARGET_MODEL_HEIGHT = 20;
+const MODEL_SOURCES = {
+    warrior: {
+        urls: [
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
+            'assets/models/warrior.glb',
+        ],
+    },
+    mage: {
+        urls: [
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/RobotExpressive/RobotExpressive.glb',
+            'assets/models/mage.glb',
+        ],
+    },
+    archer: {
+        urls: [
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
+            'assets/models/archer.glb',
+        ],
+    },
+    skeleton: {
+        urls: [
+            'assets/models/skeleton.glb',
+        ],
+    },
+};
+const ARENA_TEXTURES = {
+    floorMap: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/hardwood2_diffuse.jpg',
+    floorBump: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/hardwood2_bump.jpg',
+    wallMap: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_diffuse.jpg',
+    wallBump: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_bump.jpg',
+};
 const ARENA_SPAWNS = [
     { x: 1500, z: 1500 },
     { x: 1350, z: 1500 },
@@ -115,17 +147,39 @@ export class Game3D {
         this.container.appendChild(loaderUi);
 
         const loader = new GLTFLoader();
-        const models = ['warrior', 'mage', 'archer', 'skeleton'];
-        for (const m of models) {
-            try {
-                this.loadedModels[m] = await loader.loadAsync(`assets/models/${m}.glb`);
-            } catch (e) {
-                console.error('Failed to load', m, e);
+        for (const [cls, cfg] of Object.entries(MODEL_SOURCES)) {
+            let gltf = null;
+            for (const url of cfg.urls) {
+                try {
+                    gltf = await loader.loadAsync(url);
+                    break;
+                } catch (err) {
+                    console.warn(`Model source failed for ${cls}: ${url}`, err?.message || err);
+                }
             }
+
+            if (!gltf) {
+                console.error('Failed to load model for class:', cls);
+                continue;
+            }
+
+            this.loadedModels[cls] = {
+                gltf,
+                scale: this._computeModelScale(gltf.scene, TARGET_MODEL_HEIGHT),
+                yawOffset: cfg.yawOffset || 0,
+            };
         }
 
         loaderUi.style.opacity = '0';
         setTimeout(() => this.container.removeChild(loaderUi), 500);
+    }
+
+    _computeModelScale(scene, targetHeight = TARGET_MODEL_HEIGHT) {
+        if (!scene) return 1;
+        scene.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(scene);
+        const h = Math.max(0.001, box.max.y - box.min.y);
+        return targetHeight / h;
     }
 
     // =================== ENGINE ===================
@@ -431,11 +485,24 @@ export class Game3D {
 
     _buildArena() {
         const cx = 1500, cz = 1500;
+        const textureLoader = new THREE.TextureLoader();
+        const anisotropy = this.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+        const floorMap = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.floorMap, 28, 28, true, anisotropy);
+        const floorBump = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.floorBump, 28, 28, false, anisotropy);
+        const wallMap = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.wallMap, 22, 2, true, anisotropy);
+        const wallBump = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.wallBump, 22, 2, false, anisotropy);
 
         // Arena floor
         const floor = new THREE.Mesh(
             new THREE.CircleGeometry(420, 96),
-            new THREE.MeshStandardMaterial({ color: 0x7f7c75, roughness: 0.82, metalness: 0.06 })
+            new THREE.MeshStandardMaterial({
+                map: floorMap,
+                bumpMap: floorBump,
+                bumpScale: 0.75,
+                color: 0xbcb7ae,
+                roughness: 0.78,
+                metalness: 0.05,
+            })
         );
         floor.rotation.x = -Math.PI / 2;
         floor.position.set(cx, 0.75, cz);
@@ -455,7 +522,15 @@ export class Game3D {
         // Arena wall
         const wall = new THREE.Mesh(
             new THREE.CylinderGeometry(470, 470, 30, 72, 1, true),
-            new THREE.MeshStandardMaterial({ color: 0x6d6a62, roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide })
+            new THREE.MeshStandardMaterial({
+                map: wallMap,
+                bumpMap: wallBump,
+                bumpScale: 0.7,
+                color: 0xd1ccc2,
+                roughness: 0.88,
+                metalness: 0.03,
+                side: THREE.DoubleSide,
+            })
         );
         wall.position.set(cx, 16, cz);
         wall.receiveShadow = true;
@@ -468,7 +543,14 @@ export class Game3D {
             const z = cz + Math.sin(a) * 452;
             const col = new THREE.Mesh(
                 new THREE.CylinderGeometry(6, 7, 34, 10),
-                new THREE.MeshStandardMaterial({ color: 0x8b857d, roughness: 0.88, metalness: 0.03 })
+                new THREE.MeshStandardMaterial({
+                    map: wallMap,
+                    bumpMap: wallBump,
+                    bumpScale: 0.45,
+                    color: 0xe0dbd2,
+                    roughness: 0.86,
+                    metalness: 0.03,
+                })
             );
             col.position.set(x, 17, z);
             col.castShadow = true;
@@ -485,6 +567,16 @@ export class Game3D {
             flame.position.set(x, 18, z);
             this.scene.add(flame);
         }
+    }
+
+    _loadTiledTexture(loader, url, repeatX, repeatY, srgb = true, anisotropy = 1) {
+        const texture = loader.load(url);
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(repeatX, repeatY);
+        texture.anisotropy = anisotropy;
+        if (srgb) texture.colorSpace = THREE.SRGBColorSpace;
+        return texture;
     }
 
     _zoneOverlay(cx, cz, w, h, color, opacity) {
@@ -601,13 +693,15 @@ export class Game3D {
     // =================== CHARACTERS ===================
     _charModel(cls) {
         const g = new THREE.Group();
-        const gltf = this.loadedModels[cls] || this.loadedModels['warrior'];
+        const entry = this.loadedModels[cls] || this.loadedModels['warrior'];
+        const gltf = entry?.gltf;
 
         if (gltf) {
             // Clone so multiple players/enemies can share the same base mesh
             const model = SkeletonUtils.clone(gltf.scene);
-            const s = 6; // scale for KayKit models
+            const s = entry?.scale || 6;
             model.scale.set(s, s, s);
+            if (entry?.yawOffset) model.rotation.y = entry.yawOffset;
 
             // Setup shadows
             model.traverse(child => {
@@ -634,7 +728,7 @@ export class Game3D {
             g.userData.currentActionName = 'idle';
 
             // Play idle by default
-            const idleAnim = animMap['idle'] || gltf.animations[0];
+            const idleAnim = animMap['idle'] || animMap['standing'] || gltf.animations[0];
             if (idleAnim) {
                 const action = mixer.clipAction(idleAnim);
                 action.play();
@@ -2098,36 +2192,12 @@ export class Game3D {
                 targetAnimName = 'jump';
             } else if (isMoving) {
                 if (forwardAxis < -0.2) {
-                    targetAnimName = 'walking_backwards';
+                    targetAnimName = 'walk';
                 } else {
                     targetAnimName = this.keys['ShiftLeft'] ? 'run' : 'walk';
                 }
             }
-
-            // Map generic names to specific KayKit anim names
-            let realAnimName = targetAnimName;
-            if (targetAnimName === 'jump') realAnimName = 'jump_full_short';
-            if (targetAnimName === 'run') realAnimName = 'running_a';
-            if (targetAnimName === 'walk') realAnimName = 'walking_a';
-
-            // Fallback search
-            if (!ud.animations[realAnimName]) {
-                for (let k in ud.animations) {
-                    if (k.includes(targetAnimName.replace('_', ''))) { realAnimName = k; break; }
-                }
-            }
-
-            // Play the targeted animation if changed
-            if (ud.currentActionName !== realAnimName && ud.animations[realAnimName]) {
-                const newAction = ud.mixer.clipAction(ud.animations[realAnimName]);
-                newAction.reset();
-                if (ud.currentAction) {
-                    newAction.crossFadeFrom(ud.currentAction, 0.2, true);
-                }
-                newAction.play();
-                ud.currentAction = newAction;
-                ud.currentActionName = realAnimName;
-            }
+            this._setCharacterAnim(this.playerModel, targetAnimName);
         }
 
         // HP bar
