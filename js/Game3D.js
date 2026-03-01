@@ -22,30 +22,36 @@ const PVP_RESPAWN_MS = 3500;
 const PVP_RESPAWN_PROTECTION_MS = 2500;
 const PVP_HIT_COOLDOWN_MS = 220;
 const PVP_DMG_SCALE = 0.85;
-const LOOK_DEADZONE = 35;
-const LOOK_SMOOTH_SPEED = 12;
+const LOOK_DEADZONE = 52;
+const LOOK_SMOOTH_SPEED = 8;
 const SYNC_INTERVAL_MS = 140;
 const REMOTE_POS_SMOOTH_SPEED = 10;
 const REMOTE_ROT_SMOOTH_SPEED = 14;
 const REMOTE_TELEPORT_DIST = 220;
 const REMOTE_IDLE_SPEED = 25;
 const TARGET_MODEL_HEIGHT = 20;
+const CLASS_TINT_STRENGTH = 0.16;
+const ARENA_CENTER = { x: 1500, z: 1500 };
+const ARENA_DUST_RADIUS = 560;
 const MODEL_SOURCES = {
     warrior: {
         urls: [
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
             'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
             'assets/models/warrior.glb',
         ],
     },
     mage: {
         urls: [
-            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/RobotExpressive/RobotExpressive.glb',
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
             'assets/models/mage.glb',
         ],
     },
     archer: {
         urls: [
             'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Xbot.glb',
+            'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb',
             'assets/models/archer.glb',
         ],
     },
@@ -60,13 +66,14 @@ const ARENA_TEXTURES = {
     floorBump: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/hardwood2_bump.jpg',
     wallMap: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_diffuse.jpg',
     wallBump: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_bump.jpg',
+    stoneMap: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/terrain/grasslight-big.jpg',
 };
 const ARENA_SPAWNS = [
-    { x: 1500, z: 1500 },
-    { x: 1350, z: 1500 },
-    { x: 1650, z: 1500 },
-    { x: 1500, z: 1350 },
-    { x: 1500, z: 1650 },
+    { x: ARENA_CENTER.x, z: ARENA_CENTER.z },
+    { x: ARENA_CENTER.x - 150, z: ARENA_CENTER.z },
+    { x: ARENA_CENTER.x + 150, z: ARENA_CENTER.z },
+    { x: ARENA_CENTER.x, z: ARENA_CENTER.z - 150 },
+    { x: ARENA_CENTER.x, z: ARENA_CENTER.z + 150 },
 ];
 
 // ========== FIXED MOB POSITIONS ==========
@@ -120,6 +127,8 @@ export class Game3D {
         this.processedHitIds = new Set();
         this.processedHitOrder = [];
         this.syncInFlight = false;
+        this.arenaTorches = [];
+        this.arenaBanners = [];
 
         this._init();
         this._initPhysics();
@@ -416,12 +425,24 @@ export class Game3D {
             pos.setY(i, h);
             // Vertex colors for zone blending
             let r = 0.30, g = 0.55, b = 0.25; // default green
-            if (x < 900 && z < 900) { r = 0.18; g = 0.42; b = 0.13; } // forest - dark green
-            else if (x > 2000 && z < 900) { r = 0.47; g = 0.44; b = 0.41; } // mountains - grey-brown
-            else if (x < 900 && z > 2000) { r = 0.42; g = 0.68; b = 0.22; } // meadow - bright green
-            else if (x > 1200 && x < 1800 && z > 1200 && z < 1800) { r = 0.35; g = 0.60; b = 0.30; } // village
-            const d = Math.hypot(x - 2500, z - 2500);
-            if (d < 400) { const t = Math.max(0, 1 - d / 400); r = r * (1 - t) + 0.15 * t; g = g * (1 - t) + 0.35 * t; b = b * (1 - t) + 0.45 * t; } // lake shore blend
+            if (ARENA_MODE) {
+                const d = Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z);
+                const t = Math.min(1, d / (MAP * 0.72));
+                r = 0.53 * (1 - t) + 0.34 * t;
+                g = 0.48 * (1 - t) + 0.33 * t;
+                b = 0.41 * (1 - t) + 0.29 * t;
+                const ring = Math.max(0, 1 - Math.abs(d - 470) / 180);
+                r += ring * 0.05;
+                g += ring * 0.045;
+                b += ring * 0.03;
+            } else {
+                if (x < 900 && z < 900) { r = 0.18; g = 0.42; b = 0.13; } // forest - dark green
+                else if (x > 2000 && z < 900) { r = 0.47; g = 0.44; b = 0.41; } // mountains - grey-brown
+                else if (x < 900 && z > 2000) { r = 0.42; g = 0.68; b = 0.22; } // meadow - bright green
+                else if (x > 1200 && x < 1800 && z > 1200 && z < 1800) { r = 0.35; g = 0.60; b = 0.30; } // village
+                const d = Math.hypot(x - 2500, z - 2500);
+                if (d < 400) { const t = Math.max(0, 1 - d / 400); r = r * (1 - t) + 0.15 * t; g = g * (1 - t) + 0.35 * t; b = b * (1 - t) + 0.45 * t; } // lake shore blend
+            }
             colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = b;
         }
         groundGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -484,13 +505,31 @@ export class Game3D {
     }
 
     _buildArena() {
-        const cx = 1500, cz = 1500;
+        const cx = ARENA_CENTER.x, cz = ARENA_CENTER.z;
+        this.arenaTorches = [];
+        this.arenaBanners = [];
         const textureLoader = new THREE.TextureLoader();
         const anisotropy = this.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
         const floorMap = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.floorMap, 28, 28, true, anisotropy);
         const floorBump = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.floorBump, 28, 28, false, anisotropy);
         const wallMap = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.wallMap, 22, 2, true, anisotropy);
         const wallBump = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.wallBump, 22, 2, false, anisotropy);
+        const stoneMap = this._loadTiledTexture(textureLoader, ARENA_TEXTURES.stoneMap, 22, 22, true, anisotropy);
+
+        // Raised stone base around arena
+        const base = new THREE.Mesh(
+            new THREE.CircleGeometry(560, 96),
+            new THREE.MeshStandardMaterial({
+                map: stoneMap,
+                color: 0xc8c2b6,
+                roughness: 0.92,
+                metalness: 0.02,
+            })
+        );
+        base.rotation.x = -Math.PI / 2;
+        base.position.set(cx, 0.35, cz);
+        base.receiveShadow = true;
+        this.scene.add(base);
 
         // Arena floor
         const floor = new THREE.Mesh(
@@ -508,6 +547,44 @@ export class Game3D {
         floor.position.set(cx, 0.75, cz);
         floor.receiveShadow = true;
         this.scene.add(floor);
+
+        // Concentric stepped stands (readability + silhouette from distance)
+        for (let i = 0; i < 3; i++) {
+            const innerR = 438 + i * 34;
+            const outerR = innerR + 30;
+            const y = 1.4 + i * 3.8;
+
+            const stepTop = new THREE.Mesh(
+                new THREE.RingGeometry(innerR, outerR, 72),
+                new THREE.MeshStandardMaterial({
+                    map: stoneMap,
+                    color: 0xbdb6aa,
+                    roughness: 0.9,
+                    metalness: 0.03,
+                    side: THREE.DoubleSide,
+                })
+            );
+            stepTop.rotation.x = -Math.PI / 2;
+            stepTop.position.set(cx, y, cz);
+            stepTop.receiveShadow = true;
+            this.scene.add(stepTop);
+
+            const riser = new THREE.Mesh(
+                new THREE.CylinderGeometry(outerR, outerR, 3.8, 72, 1, true),
+                new THREE.MeshStandardMaterial({
+                    map: wallMap,
+                    bumpMap: wallBump,
+                    bumpScale: 0.35,
+                    color: 0xcfc8bc,
+                    roughness: 0.9,
+                    metalness: 0.03,
+                    side: THREE.DoubleSide,
+                })
+            );
+            riser.position.set(cx, y - 1.9, cz);
+            riser.receiveShadow = true;
+            this.scene.add(riser);
+        }
 
         // Ring border
         const ring = new THREE.Mesh(
@@ -536,6 +613,15 @@ export class Game3D {
         wall.receiveShadow = true;
         this.scene.add(wall);
 
+        const topLip = new THREE.Mesh(
+            new THREE.TorusGeometry(470, 3.2, 16, 96),
+            new THREE.MeshStandardMaterial({ color: 0x827568, roughness: 0.83, metalness: 0.06 })
+        );
+        topLip.rotation.x = Math.PI / 2;
+        topLip.position.set(cx, 31.5, cz);
+        topLip.receiveShadow = true;
+        this.scene.add(topLip);
+
         // Columns
         for (let i = 0; i < 20; i++) {
             const a = (i / 20) * Math.PI * 2;
@@ -556,16 +642,130 @@ export class Game3D {
             col.castShadow = true;
             col.receiveShadow = true;
             this.scene.add(col);
+
+            const cap = new THREE.Mesh(
+                new THREE.CylinderGeometry(8.8, 8.8, 2.2, 12),
+                new THREE.MeshStandardMaterial({ color: 0x989188, roughness: 0.86, metalness: 0.03 })
+            );
+            cap.position.set(x, 34.4, z);
+            cap.castShadow = true;
+            cap.receiveShadow = true;
+            this.scene.add(cap);
+
+            if (i % 2 === 0) {
+                const banner = new THREE.Mesh(
+                    new THREE.PlaneGeometry(18, 26),
+                    new THREE.MeshStandardMaterial({
+                        color: i % 4 === 0 ? 0xb73a3a : 0x2e4ea8,
+                        roughness: 0.84,
+                        metalness: 0.05,
+                        side: THREE.DoubleSide,
+                    })
+                );
+                banner.position.set(
+                    cx + Math.cos(a) * 444,
+                    23,
+                    cz + Math.sin(a) * 444
+                );
+                banner.rotation.y = -a + Math.PI * 0.5;
+                banner.castShadow = true;
+                banner.userData.bannerPhase = Math.random() * Math.PI * 2;
+                banner.userData.baseX = banner.position.x;
+                banner.userData.baseY = banner.position.y;
+                banner.userData.baseZ = banner.position.z;
+                banner.userData.baseRotY = banner.rotation.y;
+                this.scene.add(banner);
+                this.arenaBanners.push(banner);
+            }
         }
 
-        // Light accents
-        for (let i = 0; i < 8; i++) {
-            const a = (i / 8) * Math.PI * 2;
+        // Center marking
+        const crestOuter = new THREE.Mesh(
+            new THREE.TorusGeometry(92, 2.6, 12, 72),
+            new THREE.MeshStandardMaterial({
+                color: 0xdcc08d,
+                roughness: 0.55,
+                metalness: 0.42,
+                emissive: 0x2d1d08,
+                emissiveIntensity: 0.2,
+            })
+        );
+        crestOuter.rotation.x = Math.PI / 2;
+        crestOuter.position.set(cx, 1.1, cz);
+        this.scene.add(crestOuter);
+
+        const crestCore = new THREE.Mesh(
+            new THREE.CircleGeometry(74, 56),
+            new THREE.MeshStandardMaterial({
+                map: stoneMap,
+                color: 0xae9e88,
+                roughness: 0.9,
+                metalness: 0.05,
+            })
+        );
+        crestCore.rotation.x = -Math.PI / 2;
+        crestCore.position.set(cx, 0.95, cz);
+        crestCore.receiveShadow = true;
+        this.scene.add(crestCore);
+
+        for (let i = 0; i < 6; i++) {
+            const a = (i / 6) * Math.PI;
+            const line = new THREE.Mesh(
+                new THREE.BoxGeometry(146, 0.45, 2.1),
+                new THREE.MeshStandardMaterial({ color: 0x6f6253, roughness: 0.92, metalness: 0.03 })
+            );
+            line.position.set(cx, 1.12, cz);
+            line.rotation.y = a;
+            line.receiveShadow = true;
+            this.scene.add(line);
+        }
+
+        // Torches with dynamic flicker
+        for (let i = 0; i < 10; i++) {
+            const a = (i / 10) * Math.PI * 2;
             const x = cx + Math.cos(a) * 360;
             const z = cz + Math.sin(a) * 360;
-            const flame = new THREE.PointLight(0xffb74d, 1.2, 140, 2);
-            flame.position.set(x, 18, z);
+
+            const pole = new THREE.Mesh(
+                new THREE.CylinderGeometry(1.2, 1.2, 16, 8),
+                new THREE.MeshStandardMaterial({ color: 0x4f4338, roughness: 0.72, metalness: 0.32 })
+            );
+            pole.position.set(x, 9, z);
+            pole.castShadow = true;
+            pole.receiveShadow = true;
+            this.scene.add(pole);
+
+            const bowl = new THREE.Mesh(
+                new THREE.CylinderGeometry(3.2, 2.4, 1.8, 10),
+                new THREE.MeshStandardMaterial({ color: 0x3b332b, roughness: 0.6, metalness: 0.45 })
+            );
+            bowl.position.set(x, 17.3, z);
+            bowl.castShadow = true;
+            this.scene.add(bowl);
+
+            const flameMesh = new THREE.Mesh(
+                new THREE.SphereGeometry(2.4, 7, 7),
+                new THREE.MeshStandardMaterial({
+                    color: 0xffc86f,
+                    emissive: 0xff8f1f,
+                    emissiveIntensity: 1.7,
+                    roughness: 0.45,
+                    metalness: 0.0,
+                })
+            );
+            flameMesh.position.set(x, 20.4, z);
+            this.scene.add(flameMesh);
+
+            const flame = new THREE.PointLight(0xffb76a, 1.25, 160, 2);
+            flame.position.set(x, 20.2, z);
             this.scene.add(flame);
+
+            this.arenaTorches.push({
+                light: flame,
+                flame: flameMesh,
+                phase: Math.random() * Math.PI * 2,
+                baseIntensity: 1.25,
+            });
         }
     }
 
@@ -702,6 +902,20 @@ export class Game3D {
             const s = entry?.scale || 6;
             model.scale.set(s, s, s);
             if (entry?.yawOffset) model.rotation.y = entry.yawOffset;
+            const classTint = new THREE.Color(CLASS_COLORS[cls] || 0xffffff);
+            const stylizeMaterial = (material) => {
+                if (!material) return material;
+                const m = material.clone();
+                m.roughness = Math.min(0.85, Math.max(0.25, m.roughness ?? 0.6));
+                m.metalness = Math.min(0.18, Math.max(0.0, m.metalness ?? 0.02));
+                m.envMapIntensity = 1.1;
+                if (m.color) m.color.lerp(classTint, CLASS_TINT_STRENGTH);
+                if (m.emissive) {
+                    m.emissive.lerp(classTint, CLASS_TINT_STRENGTH * 0.35);
+                    m.emissiveIntensity = Math.max(0.08, m.emissiveIntensity ?? 0);
+                }
+                return m;
+            };
 
             // Setup shadows
             model.traverse(child => {
@@ -709,9 +923,9 @@ export class Game3D {
                     child.castShadow = true;
                     child.receiveShadow = true;
                     if (child.material) {
-                        child.material.roughness = Math.min(0.85, Math.max(0.25, child.material.roughness ?? 0.6));
-                        child.material.metalness = Math.min(0.18, Math.max(0.0, child.material.metalness ?? 0.02));
-                        child.material.envMapIntensity = 1.1;
+                        child.material = Array.isArray(child.material)
+                            ? child.material.map(stylizeMaterial)
+                            : stylizeMaterial(child.material);
                     }
                 }
             });
@@ -1977,16 +2191,30 @@ export class Game3D {
 
     // =================== AMBIENT ===================
     _createParticles() {
-        const count = 500;
+        const count = ARENA_MODE ? 760 : 500;
         const geo = new THREE.BufferGeometry();
         const positions = new Float32Array(count * 3);
         for (let i = 0; i < count; i++) {
-            positions[i * 3] = Math.random() * MAP;
-            positions[i * 3 + 1] = 5 + Math.random() * 80;
-            positions[i * 3 + 2] = Math.random() * MAP;
+            if (ARENA_MODE) {
+                const a = Math.random() * Math.PI * 2;
+                const r = Math.sqrt(Math.random()) * ARENA_DUST_RADIUS;
+                positions[i * 3] = ARENA_CENTER.x + Math.cos(a) * r;
+                positions[i * 3 + 1] = 4 + Math.random() * 100;
+                positions[i * 3 + 2] = ARENA_CENTER.z + Math.sin(a) * r;
+            } else {
+                positions[i * 3] = Math.random() * MAP;
+                positions[i * 3 + 1] = 5 + Math.random() * 80;
+                positions[i * 3 + 2] = Math.random() * MAP;
+            }
         }
         geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        const mat = new THREE.PointsMaterial({ color: 0xffffee, size: 1.5, transparent: true, opacity: 0.4, sizeAttenuation: true });
+        const mat = new THREE.PointsMaterial({
+            color: ARENA_MODE ? 0xffdfb6 : 0xffffee,
+            size: ARENA_MODE ? 1.1 : 1.5,
+            transparent: true,
+            opacity: ARENA_MODE ? 0.48 : 0.4,
+            sizeAttenuation: true
+        });
         this.particles = new THREE.Points(geo, mat);
         this.scene.add(this.particles);
     }
@@ -2007,12 +2235,25 @@ export class Game3D {
         ctx.ellipse(80, 28, 35, 16, 0, 0, Math.PI * 2);
         ctx.fill();
         const tex = new THREE.CanvasTexture(cloudCanvas);
-        for (let i = 0; i < 12; i++) {
+        const cloudCount = ARENA_MODE ? 8 : 12;
+        for (let i = 0; i < cloudCount; i++) {
             const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.3 + Math.random() * 0.2 }));
             const s = 150 + Math.random() * 200;
             sprite.scale.set(s, s * 0.4, 1);
-            sprite.position.set(Math.random() * MAP, 250 + Math.random() * 100, Math.random() * MAP);
-            sprite.userData.speed = 3 + Math.random() * 5;
+            if (ARENA_MODE) {
+                const a = (i / cloudCount) * Math.PI * 2;
+                const r = 620 + Math.random() * 220;
+                sprite.position.set(
+                    ARENA_CENTER.x + Math.cos(a) * r,
+                    250 + Math.random() * 120,
+                    ARENA_CENTER.z + Math.sin(a) * r
+                );
+                sprite.userData.speed = 2 + Math.random() * 3;
+            } else {
+                sprite.position.set(Math.random() * MAP, 250 + Math.random() * 100, Math.random() * MAP);
+                sprite.userData.speed = 3 + Math.random() * 5;
+            }
+            sprite.userData.phase = Math.random() * Math.PI * 2;
             this.scene.add(sprite);
             this.clouds.push(sprite);
         }
@@ -2023,19 +2264,64 @@ export class Game3D {
         if (this.particles) {
             const positions = this.particles.geometry.attributes.position.array;
             for (let i = 0; i < positions.length; i += 3) {
-                positions[i + 1] += Math.sin(time * 0.001 + positions[i]) * 0.05;
-                positions[i] += Math.cos(time * 0.0005 + positions[i + 2]) * 0.08;
-                if (positions[i + 1] > 90) positions[i + 1] = 5;
-                if (positions[i + 1] < 3) positions[i + 1] = 80;
+                if (ARENA_MODE) {
+                    positions[i + 1] += 0.03 + Math.sin(time * 0.0016 + i * 0.013) * 0.035;
+                    positions[i] += Math.cos(time * 0.0009 + i * 0.02) * 0.06;
+                    positions[i + 2] += Math.sin(time * 0.0011 + i * 0.017) * 0.05;
+
+                    const dx = positions[i] - ARENA_CENTER.x;
+                    const dz = positions[i + 2] - ARENA_CENTER.z;
+                    if (positions[i + 1] > 105 || (dx * dx + dz * dz) > (ARENA_DUST_RADIUS * ARENA_DUST_RADIUS)) {
+                        const a = Math.random() * Math.PI * 2;
+                        const r = Math.sqrt(Math.random()) * ARENA_DUST_RADIUS;
+                        positions[i] = ARENA_CENTER.x + Math.cos(a) * r;
+                        positions[i + 1] = 4 + Math.random() * 8;
+                        positions[i + 2] = ARENA_CENTER.z + Math.sin(a) * r;
+                    }
+                } else {
+                    positions[i + 1] += Math.sin(time * 0.001 + positions[i]) * 0.05;
+                    positions[i] += Math.cos(time * 0.0005 + positions[i + 2]) * 0.08;
+                    if (positions[i + 1] > 90) positions[i + 1] = 5;
+                    if (positions[i + 1] < 3) positions[i + 1] = 80;
+                }
             }
             this.particles.geometry.attributes.position.needsUpdate = true;
         }
 
         // Cloud movement
         this.clouds.forEach(c => {
-            c.position.x += c.userData.speed * dt;
-            if (c.position.x > MAP + 200) c.position.x = -200;
+            if (ARENA_MODE) {
+                const phase = c.userData.phase || 0;
+                c.position.x += Math.cos(phase + time * 0.00008) * c.userData.speed * dt;
+                c.position.z += Math.sin(phase + time * 0.00008) * c.userData.speed * dt;
+            } else {
+                c.position.x += c.userData.speed * dt;
+                if (c.position.x > MAP + 200) c.position.x = -200;
+            }
         });
+
+        if (ARENA_MODE && this.arenaTorches.length) {
+            this.arenaTorches.forEach((torch) => {
+                const pulse = 0.88
+                    + Math.sin(time * 0.010 + torch.phase) * 0.12
+                    + Math.sin(time * 0.021 + torch.phase * 1.7) * 0.07;
+                torch.light.intensity = torch.baseIntensity * pulse;
+                torch.light.distance = 145 + pulse * 24;
+                torch.flame.scale.setScalar(0.82 + pulse * 0.3);
+                if (torch.flame.material) torch.flame.material.emissiveIntensity = 1.25 + pulse * 0.9;
+            });
+        }
+
+        if (ARENA_MODE && this.arenaBanners.length) {
+            this.arenaBanners.forEach((banner, index) => {
+                const phase = banner.userData.bannerPhase || 0;
+                banner.position.x = banner.userData.baseX + Math.sin(time * 0.0019 + phase) * 1.7;
+                banner.position.y = banner.userData.baseY + Math.sin(time * 0.0024 + phase + index) * 0.45;
+                banner.position.z = banner.userData.baseZ + Math.cos(time * 0.0017 + phase) * 1.4;
+                banner.rotation.y = banner.userData.baseRotY + Math.sin(time * 0.0022 + phase) * 0.08;
+                banner.rotation.z = Math.sin(time * 0.0031 + phase) * 0.16;
+            });
+        }
 
         // Water animation
         if (this.water) {
@@ -2123,9 +2409,9 @@ export class Game3D {
 
         if (this.keys['KeyW'] || this.keys['ArrowUp']) forwardAxis += 1;
         if (this.keys['KeyS'] || this.keys['ArrowDown']) forwardAxis -= 1;
-        // Intentionally inverted relative to previous implementation to match screen-space expectation.
-        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis += 1;
-        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis -= 1;
+        // Natural FPS strafe mapping.
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis -= 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis += 1;
 
         // Mouse controls look direction.
         const target = this._getMouseWorldPos();
