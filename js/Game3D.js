@@ -22,7 +22,7 @@ const PVP_RESPAWN_MS = 3500;
 const PVP_RESPAWN_PROTECTION_MS = 2500;
 const PVP_HIT_COOLDOWN_MS = 220;
 const PVP_DMG_SCALE = 0.85;
-const LOOK_SMOOTH_SPEED = 8;
+const LOOK_SMOOTH_SPEED = 18;
 const LOOK_SENSITIVITY = 0.0022;
 const SYNC_INTERVAL_MS = 140;
 const MOVE_BROADCAST_INTERVAL_MS = 55;
@@ -37,6 +37,7 @@ const CLASS_TINT_STRENGTH = 0.16;
 const ARENA_CENTER = { x: 1500, z: 1500 };
 const ARENA_DUST_RADIUS = 560;
 const PLAYER_COLLIDER_RADIUS = 11;
+const PLAYER_FOOT_CLEARANCE = 0.26;
 const MODEL_SOURCES = {
     warrior: {
         urls: [
@@ -175,9 +176,11 @@ export class Game3D {
         const loader = new GLTFLoader();
         for (const [cls, cfg] of Object.entries(MODEL_SOURCES)) {
             let gltf = null;
+            let loadedFromUrl = null;
             for (const url of cfg.urls) {
                 try {
                     gltf = await loader.loadAsync(url);
+                    loadedFromUrl = url;
                     break;
                 } catch (err) {
                     console.warn(`Model source failed for ${cls}: ${url}`, err?.message || err);
@@ -192,7 +195,9 @@ export class Game3D {
             this.loadedModels[cls] = {
                 gltf,
                 scale: this._computeModelScale(gltf.scene, TARGET_MODEL_HEIGHT),
-                yawOffset: cfg.yawOffset || 0,
+                yawOffset: typeof cfg.yawOffset === 'number'
+                    ? cfg.yawOffset
+                    : this._defaultModelYawOffset(cls, loadedFromUrl),
             };
         }
 
@@ -206,6 +211,13 @@ export class Game3D {
         const box = new THREE.Box3().setFromObject(scene);
         const h = Math.max(0.001, box.max.y - box.min.y);
         return targetHeight / h;
+    }
+
+    _defaultModelYawOffset(cls, loadedFromUrl) {
+        const source = (loadedFromUrl || '').toLowerCase();
+        if (cls === 'warrior' || cls === 'mage' || cls === 'archer') return Math.PI;
+        if (source.includes('xbot.glb') || source.includes('soldier.glb')) return Math.PI;
+        return 0;
     }
 
     // =================== ENGINE ===================
@@ -444,7 +456,7 @@ export class Game3D {
     }
 
     _resolveArenaCollision(x, z, radius = PLAYER_COLLIDER_RADIUS) {
-        if (!ARENA_MODE || !this.arenaColliders?.length) return { x, z };
+        if (!this.arenaColliders?.length) return { x, z };
         let nx = x;
         let nz = z;
 
@@ -471,6 +483,7 @@ export class Game3D {
 
     // =================== WORLD ===================
     _world() {
+        this.arenaColliders = [];
         // Ground with vertex colors for zone blending
         const groundGeo = new THREE.PlaneGeometry(MAP, MAP, 128, 128);
         groundGeo.rotateX(-Math.PI / 2);
@@ -879,18 +892,18 @@ export class Game3D {
             const x = ARENA_CENTER.x + Math.cos(a) * r;
             const z = ARENA_CENTER.z + Math.sin(a) * r;
             const h = 80 + Math.random() * 170;
+            const ridgeRadius = 80 + Math.random() * 110;
             const ridge = new THREE.Mesh(
-                new THREE.ConeGeometry(80 + Math.random() * 110, h, 8),
+                new THREE.ConeGeometry(ridgeRadius, h, 8),
                 new THREE.MeshStandardMaterial({ color: 0x6d675f, roughness: 0.94, metalness: 0.02 })
             );
-            ridge.position.set(
-                Math.max(80, Math.min(MAP - 80, x)),
-                (h * 0.5) - 4,
-                Math.max(80, Math.min(MAP - 80, z))
-            );
+            const rx = Math.max(80, Math.min(MAP - 80, x));
+            const rz = Math.max(80, Math.min(MAP - 80, z));
+            ridge.position.set(rx, (h * 0.5) - 4, rz);
             ridge.castShadow = true;
             ridge.receiveShadow = true;
             this.scene.add(ridge);
+            this._addArenaCircleCollider(rx, rz, ridgeRadius * 0.7);
         }
     }
 
@@ -945,6 +958,7 @@ export class Game3D {
         }
         g.position.set(x, 0, z);
         this.scene.add(g);
+        this._addArenaCircleCollider(x, z, type === 'pine' ? 8 : 10);
     }
 
     _scatterTrees(xMin, xMax, zMin, zMax, count, color, type) {
@@ -972,6 +986,7 @@ export class Game3D {
             rock.rotation.set(Math.random(), Math.random(), Math.random());
             rock.castShadow = true;
             this.scene.add(rock);
+            this._addArenaCircleCollider(x, z, Math.max(3, s * 0.75));
         }
     }
 
@@ -1000,6 +1015,7 @@ export class Game3D {
         });
         g.position.set(x, 0, z);
         this.scene.add(g);
+        this._addArenaCircleCollider(x, z, 24);
     }
 
     _well(x, z) {
@@ -1015,6 +1031,7 @@ export class Game3D {
             const post = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 16, 4), new THREE.MeshStandardMaterial({ color: 0x5D4037 }));
             post.position.set(x + ox, 14, z); this.scene.add(post);
         });
+        this._addArenaCircleCollider(x, z, 11);
     }
 
     // =================== CHARACTERS ===================
@@ -1330,7 +1347,7 @@ export class Game3D {
 
         if (!Number.isFinite(minY)) return 0;
         // Lift model so the lowest point rests on the terrain surface.
-        return Math.max(0, -minY + 0.15);
+        return Math.max(PLAYER_FOOT_CLEARANCE, -minY + PLAYER_FOOT_CLEARANCE);
     }
 
     _getPlayerGroundTargetY(x, z) {
@@ -1681,60 +1698,58 @@ export class Game3D {
         if (isLocal) {
             const sx = pos.x + Math.sin(angle) * 15;
             const sz = pos.z + Math.cos(angle) * 15;
-            if (!ARENA_MODE) {
-                this.enemies.forEach(e => {
-                    if (!e.alive) return;
-                    const d = Math.hypot(e.model.position.x - sx, e.model.position.z - sz);
-                    const hitRange = e.def.isBoss ? 40 : 25;
-                    if (d < hitRange) {
-                        // === Phase 4: Hit zone detection ===
-                        const hitZone = this._getHitZone(swingDir, e);
-                        const zoneMult = { head: 3.0, torso: 1.0, arm_right: 0.5, arm_left: 0.5, leg_right: 0.7, leg_left: 0.7 };
-                        const zoneDmg = Math.round(dmg * (zoneMult[hitZone] || 1.0));
+            this.enemies.forEach(e => {
+                if (!e.alive) return;
+                const d = Math.hypot(e.model.position.x - sx, e.model.position.z - sz);
+                const hitRange = e.def.isBoss ? 40 : 25;
+                if (d < hitRange) {
+                    // === Phase 4: Hit zone detection ===
+                    const hitZone = this._getHitZone(swingDir, e);
+                    const zoneMult = { head: 3.0, torso: 1.0, arm_right: 0.5, arm_left: 0.5, leg_right: 0.7, leg_left: 0.7 };
+                    const zoneDmg = Math.round(dmg * (zoneMult[hitZone] || 1.0));
 
-                        this._dmg(e, zoneDmg, angle, swingDir);
+                    this._dmg(e, zoneDmg, angle, swingDir);
 
-                        // Zone-specific feedback
-                        const zoneColors = { head: '#FF2222', torso: '#FFD700', arm_right: '#FF8800', arm_left: '#FF8800', leg_right: '#FFAA44', leg_left: '#FFAA44' };
-                        const zoneLabels = { head: '💀 HEADSHOT!', arm_right: '✂️ ARM!', arm_left: '✂️ ARM!', leg_right: '🦵 LEG!', leg_left: '🦵 LEG!' };
-                        if (zoneLabels[hitZone]) {
-                            this._floatDmg(e.model.position, zoneLabels[hitZone], zoneColors[hitZone] || '#FFFFFF');
-                        }
-
-                        // Headshot bonus effects
-                        if (hitZone === 'head') {
-                            this._triggerSlowMo(0.3, 0.1);
-                            this._triggerHitFreeze(100);
-                            this._triggerScreenFlash('#FF4444', 200);
-                            this.shakeIntensity = 10;
-                        } else {
-                            this._triggerHitFreeze(60);
-                            this._triggerScreenFlash('#FFFFFF', 100);
-                            this.shakeIntensity = 5;
-                        }
-                        this.lastSwingAngle = angle;
-
-                        // Physics-based knockback
-                        const kbForce = swingDir === 'overhead' ? 8 : swingDir === 'thrust' ? 12 : 6;
-                        e.model.position.x += Math.sin(angle) * kbForce;
-                        e.model.position.z += Math.cos(angle) * kbForce;
-                        // Stagger effect
-                        e.lastAtk = performance.now() + 300;
-                        // Hit impact
-                        this._hitImpact(e.model.position, swingDir);
-
-                        // === Dismemberment check ===
-                        if (hitZone !== 'torso' && zoneDmg > e.maxHp * 0.2) {
-                            this._dismemberPart(e, hitZone, angle, swingDir);
-                        }
-
-                        // Slow-mo on kills
-                        if (e.hp <= 0 && (swingDir === 'overhead' || swingDir === 'thrust' || hitZone === 'head')) {
-                            this._triggerSlowMo(0.4, 0.15);
-                        }
+                    // Zone-specific feedback
+                    const zoneColors = { head: '#FF2222', torso: '#FFD700', arm_right: '#FF8800', arm_left: '#FF8800', leg_right: '#FFAA44', leg_left: '#FFAA44' };
+                    const zoneLabels = { head: '💀 HEADSHOT!', arm_right: '✂️ ARM!', arm_left: '✂️ ARM!', leg_right: '🦵 LEG!', leg_left: '🦵 LEG!' };
+                    if (zoneLabels[hitZone]) {
+                        this._floatDmg(e.model.position, zoneLabels[hitZone], zoneColors[hitZone] || '#FFFFFF');
                     }
-                });
-            }
+
+                    // Headshot bonus effects
+                    if (hitZone === 'head') {
+                        this._triggerSlowMo(0.3, 0.1);
+                        this._triggerHitFreeze(100);
+                        this._triggerScreenFlash('#FF4444', 200);
+                        this.shakeIntensity = 10;
+                    } else {
+                        this._triggerHitFreeze(60);
+                        this._triggerScreenFlash('#FFFFFF', 100);
+                        this.shakeIntensity = 5;
+                    }
+                    this.lastSwingAngle = angle;
+
+                    // Physics-based knockback
+                    const kbForce = swingDir === 'overhead' ? 8 : swingDir === 'thrust' ? 12 : 6;
+                    e.model.position.x += Math.sin(angle) * kbForce;
+                    e.model.position.z += Math.cos(angle) * kbForce;
+                    // Stagger effect
+                    e.lastAtk = performance.now() + 300;
+                    // Hit impact
+                    this._hitImpact(e.model.position, swingDir);
+
+                    // === Dismemberment check ===
+                    if (hitZone !== 'torso' && zoneDmg > e.maxHp * 0.2) {
+                        this._dismemberPart(e, hitZone, angle, swingDir);
+                    }
+
+                    // Slow-mo on kills
+                    if (e.hp <= 0 && (swingDir === 'overhead' || swingDir === 'thrust' || hitZone === 'head')) {
+                        this._triggerSlowMo(0.4, 0.15);
+                    }
+                }
+            });
 
             const forwardX = Math.sin(angle);
             const forwardZ = Math.cos(angle);
@@ -2708,7 +2723,7 @@ export class Game3D {
             const resolved = this._resolveArenaCollision(nextX, nextZ, PLAYER_COLLIDER_RADIUS);
             this.playerModel.position.x = resolved.x;
             this.playerModel.position.z = resolved.z;
-        } else if (ARENA_MODE) {
+        } else {
             const resolved = this._resolveArenaCollision(this.playerModel.position.x, this.playerModel.position.z, PLAYER_COLLIDER_RADIUS);
             this.playerModel.position.x = resolved.x;
             this.playerModel.position.z = resolved.z;
@@ -3325,19 +3340,17 @@ export class Game3D {
                 }
                 if (consumed) continue;
 
-                if (!ARENA_MODE) {
-                    for (const e of this.enemies) {
-                        if (!e.alive) continue;
-                        if (Math.hypot(e.model.position.x - p.mesh.position.x, e.model.position.z - p.mesh.position.z) < (e.def.isBoss ? 30 : 15)) {
-                            this._dmg(e, p.dmg);
-                            this.scene.remove(p.mesh);
-                            this.projectiles.splice(i, 1);
-                            consumed = true;
-                            break;
-                        }
+                for (const e of this.enemies) {
+                    if (!e.alive) continue;
+                    if (Math.hypot(e.model.position.x - p.mesh.position.x, e.model.position.z - p.mesh.position.z) < (e.def.isBoss ? 30 : 15)) {
+                        this._dmg(e, p.dmg);
+                        this.scene.remove(p.mesh);
+                        this.projectiles.splice(i, 1);
+                        consumed = true;
+                        break;
                     }
-                    if (consumed) continue;
                 }
+                if (consumed) continue;
             }
 
             // Lifetime
@@ -3352,20 +3365,18 @@ export class Game3D {
         const px = this.playerModel.position.x, pz = this.playerModel.position.z;
         let nearestDist = Infinity;
 
-        if (ARENA_MODE) {
-            Object.entries(this.others).forEach(([rawId, m]) => {
-                const state = this.remotePlayers[Number(rawId)];
-                if (state && state.hp <= 0) return;
-                const d = Math.hypot(m.position.x - px, m.position.z - pz);
-                if (d < nearestDist) nearestDist = d;
-            });
-        } else {
-            this.enemies.forEach(e => {
-                if (!e.alive) return;
-                const d = Math.hypot(e.model.position.x - px, e.model.position.z - pz);
-                if (d < nearestDist) nearestDist = d;
-            });
-        }
+        Object.entries(this.others).forEach(([rawId, m]) => {
+            const state = this.remotePlayers[Number(rawId)];
+            if (state && state.hp <= 0) return;
+            const d = Math.hypot(m.position.x - px, m.position.z - pz);
+            if (d < nearestDist) nearestDist = d;
+        });
+
+        this.enemies.forEach(e => {
+            if (!e.alive) return;
+            const d = Math.hypot(e.model.position.x - px, e.model.position.z - pz);
+            if (d < nearestDist) nearestDist = d;
+        });
 
         const inCombat = nearestDist < 200;
         const targetBlend = inCombat ? 1 : 0;
