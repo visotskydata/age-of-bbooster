@@ -12,7 +12,7 @@ import { dbSync, initRealtime, broadcastAttack, broadcastMobHit, broadcastPlayer
 // ========== CONSTANTS ==========
 const MAP = 3000;
 const CAM_H = 350, CAM_DIST = 280;
-const CLASS_SPEED = { warrior: 120, mage: 140, archer: 170 };
+const CLASS_SPEED = { warrior: 60, mage: 70, archer: 85 };
 const CLASS_ATK_CD = { warrior: 450, mage: 900, archer: 650 };
 const CLASS_DMG = { warrior: 20, mage: 28, archer: 16 };
 const ARENA_MODE = true;
@@ -40,6 +40,12 @@ const ARENA_NO_MOB_RADIUS = 620;
 const PLAYER_COLLIDER_RADIUS = 11;
 const PLAYER_FOOT_CLEARANCE = 0.26;
 const PROJECTILE_WORLD_RADIUS = { mage: 2.4, archer: 1.2 };
+const STRAFE_SPEED_MULT = 0.5;
+const SPRINT_SPEED_MULT = 1.45;
+const STAMINA_MAX = 100;
+const STAMINA_DRAIN_PER_SEC = 28;
+const STAMINA_RECOVER_PER_SEC = 18;
+const STAMINA_RECOVER_DELAY_MS = 850;
 const PREMIUM_MANIFEST_URL = 'assets/premium/manifest.json';
 const CLASS_ACTIONS = {
     warrior: {
@@ -170,6 +176,9 @@ export class Game3D {
         this.lookYaw = 0;
         this.lastMoveBroadcast = 0;
         this.localMoveSeq = 0;
+        this.stamina = STAMINA_MAX;
+        this.lastSprintAt = 0;
+        this.staminaUI = null;
 
         this._init();
         this._initPhysics();
@@ -1005,37 +1014,69 @@ export class Game3D {
         ];
         giantTrees.forEach(([x, z, type, color, scale]) => this._tree(x, z, type, color, scale));
 
-        // Few large landmarks.
-        [
-            [420, 1500, 1.85, 0.18],
-            [2580, 1500, 1.9, -0.24],
-            [1500, 420, 1.7, 0],
-            [1500, 2580, 1.7, Math.PI],
-        ].forEach(([x, z, scale, rot]) => this._building(x, z, scale, rot));
+        // Solid perimeter barrier instead of separated cone-like mountains.
+        this._buildPerimeterBarrier();
+    }
 
-        // Impassable mountain walls on map edges (low count, big forms).
-        const rockMat = new THREE.MeshStandardMaterial({ color: 0x675f57, roughness: 0.95, metalness: 0.01 });
-        const placeEdgeMountain = (x, z, radius, height, rot = 0) => {
-            const y = this._getTerrainHeight(x, z);
-            const mountain = new THREE.Mesh(new THREE.ConeGeometry(radius, height, 7), rockMat);
-            mountain.position.set(x, y + (height * 0.5) - 8, z);
-            mountain.rotation.y = rot;
-            mountain.castShadow = false;
-            mountain.receiveShadow = true;
-            this.scene.add(mountain);
-            this._addArenaCircleCollider(x, z, radius * 0.82);
+    _buildPerimeterBarrier() {
+        const inset = 84;
+        const wallH = 210;
+        const wallT = 34;
+        const segMat = new THREE.MeshStandardMaterial({
+            color: 0x6a6257,
+            roughness: 0.94,
+            metalness: 0.01,
+        });
+        const capMat = new THREE.MeshStandardMaterial({
+            color: 0x877c6d,
+            roughness: 0.9,
+            metalness: 0.02,
+        });
+
+        const mkWall = (x, z, w, d) => {
+            const baseY = this._getTerrainHeight(x, z);
+            const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, d), segMat);
+            wall.position.set(x, baseY + wallH * 0.5 - 8, z);
+            wall.castShadow = false;
+            wall.receiveShadow = true;
+            this.scene.add(wall);
+
+            const cap = new THREE.Mesh(new THREE.BoxGeometry(w * 1.02, 12, d * 1.02), capMat);
+            cap.position.set(x, wall.position.y + wallH * 0.5 + 5, z);
+            cap.castShadow = false;
+            cap.receiveShadow = true;
+            this.scene.add(cap);
         };
 
-        for (let i = 0; i < 8; i++) {
-            const z = 220 + i * 360;
-            placeEdgeMountain(120, z, 120 + (i % 3) * 18, 280 + (i % 4) * 36, 0.2);
-            placeEdgeMountain(MAP - 120, z + ((i % 2) ? 25 : -20), 128 + ((i + 1) % 3) * 16, 300 + (i % 4) * 34, -0.2);
-        }
-        for (let i = 0; i < 7; i++) {
-            const x = 320 + i * 360;
-            placeEdgeMountain(x, 120, 122 + (i % 3) * 20, 290 + (i % 4) * 30, 0.1);
-            placeEdgeMountain(x + ((i % 2) ? 20 : -18), MAP - 120, 126 + ((i + 2) % 3) * 14, 310 + (i % 4) * 32, -0.1);
-        }
+        const span = MAP - inset * 2;
+        mkWall(MAP * 0.5, inset, span, wallT);
+        mkWall(MAP * 0.5, MAP - inset, span, wallT);
+        mkWall(inset, MAP * 0.5, wallT, span);
+        mkWall(MAP - inset, MAP * 0.5, wallT, span);
+
+        // Corner bastions to hide seams and make shape look intentional.
+        const cornerR = 64;
+        const corners = [
+            [inset, inset],
+            [MAP - inset, inset],
+            [inset, MAP - inset],
+            [MAP - inset, MAP - inset],
+        ];
+        corners.forEach(([x, z]) => {
+            const baseY = this._getTerrainHeight(x, z);
+            const bastion = new THREE.Mesh(new THREE.CylinderGeometry(cornerR, cornerR * 1.12, wallH + 36, 10), segMat);
+            bastion.position.set(x, baseY + (wallH + 36) * 0.5 - 10, z);
+            bastion.castShadow = false;
+            bastion.receiveShadow = true;
+            this.scene.add(bastion);
+            this._addArenaCircleCollider(x, z, cornerR * 0.9);
+        });
+
+        // Continuous collision ring with no gaps.
+        this._addLineColliders(inset, inset, MAP - inset, inset, wallT * 0.6, 1.05);
+        this._addLineColliders(MAP - inset, inset, MAP - inset, MAP - inset, wallT * 0.6, 1.05);
+        this._addLineColliders(MAP - inset, MAP - inset, inset, MAP - inset, wallT * 0.6, 1.05);
+        this._addLineColliders(inset, MAP - inset, inset, inset, wallT * 0.6, 1.05);
     }
 
     _scatterForestCluster(cx, cz, radius, count, color, type) {
@@ -1748,6 +1789,8 @@ export class Game3D {
         this.hpBar = this._createHPBar(36);
         this.playerModel.add(this.hpBar);
         this.hpBar.position.y = 22;
+        this._ensureStaminaUI();
+        this._updateStaminaUI(false);
 
         // Name label (CSS2D alternative: create a div)
         this._createLabel(this.user.login, this.playerModel);
@@ -1780,15 +1823,109 @@ export class Game3D {
 
     _createHPBar(w) {
         const g = new THREE.Group();
-        const bg = new THREE.Mesh(new THREE.PlaneGeometry(w, 2), new THREE.MeshBasicMaterial({ color: 0x333333, side: THREE.DoubleSide }));
-        bg.rotation.x = -Math.PI / 4;
+        const bg = new THREE.Mesh(
+            new THREE.PlaneGeometry(w + 2, 3),
+            new THREE.MeshBasicMaterial({
+                color: 0x0f141d,
+                transparent: true,
+                opacity: 0.85,
+                depthWrite: false,
+                depthTest: false,
+                side: THREE.DoubleSide,
+            })
+        );
+        bg.renderOrder = 40;
         g.add(bg);
-        const fill = new THREE.Mesh(new THREE.PlaneGeometry(w, 2), new THREE.MeshBasicMaterial({ color: 0x4CAF50, side: THREE.DoubleSide }));
-        fill.rotation.x = -Math.PI / 4; fill.position.z = -0.1;
+        const fill = new THREE.Mesh(
+            new THREE.PlaneGeometry(w, 1.9),
+            new THREE.MeshBasicMaterial({
+                color: 0x5fd16b,
+                transparent: true,
+                opacity: 0.96,
+                depthWrite: false,
+                depthTest: false,
+                side: THREE.DoubleSide,
+            })
+        );
+        fill.position.z = 0.03;
+        fill.renderOrder = 41;
         g.add(fill);
+        const frame = new THREE.Mesh(
+            new THREE.PlaneGeometry(w + 2.8, 3.7),
+            new THREE.MeshBasicMaterial({
+                color: 0x000000,
+                transparent: true,
+                opacity: 0.38,
+                depthWrite: false,
+                depthTest: false,
+                side: THREE.DoubleSide,
+            })
+        );
+        frame.position.z = -0.02;
+        frame.renderOrder = 39;
+        g.add(frame);
         g.fillMesh = fill;
+        g.bgMesh = bg;
         g.maxW = w;
+        g.userData.isBillboardBar = true;
         return g;
+    }
+
+    _setHPBarValue(bar, pct) {
+        if (!bar?.fillMesh) return;
+        const clamped = THREE.MathUtils.clamp(Number(pct) || 0, 0.01, 1);
+        bar.fillMesh.scale.x = clamped;
+        bar.fillMesh.position.x = -bar.maxW * (1 - clamped) / 2;
+        bar.fillMesh.material.color.setHex(clamped > 0.6 ? 0x5fd16b : clamped > 0.32 ? 0xf1b94c : 0xff6363);
+    }
+
+    _updateBillboardBars() {
+        if (!this.camera) return;
+        const face = (bar) => {
+            if (!bar) return;
+            bar.quaternion.copy(this.camera.quaternion);
+        };
+        face(this.hpBar);
+        this.enemies.forEach((e) => {
+            if (!e?.alive) return;
+            face(e.hpBar);
+        });
+    }
+
+    _ensureStaminaUI() {
+        if (this.staminaUI?.root?.isConnected) return;
+        const root = document.createElement('div');
+        root.style.cssText = [
+            'position:fixed',
+            'left:22px',
+            'bottom:20px',
+            'width:190px',
+            'z-index:9999',
+            'pointer-events:none',
+            'font:600 12px Inter, sans-serif',
+            'color:#e7ecf6',
+            'text-shadow:0 1px 2px rgba(0,0,0,.75)',
+        ].join(';');
+        const title = document.createElement('div');
+        title.textContent = 'STAMINA';
+        title.style.cssText = 'margin-bottom:4px;letter-spacing:.8px;opacity:.9;';
+        const barBg = document.createElement('div');
+        barBg.style.cssText = 'height:10px;border-radius:999px;background:rgba(15,22,30,.86);border:1px solid rgba(255,255,255,.14);overflow:hidden;';
+        const barFill = document.createElement('div');
+        barFill.style.cssText = 'height:100%;width:100%;background:linear-gradient(90deg,#52d97f,#e5c44a);transition:width .09s linear, background-color .12s linear;';
+        barBg.appendChild(barFill);
+        root.append(title, barBg);
+        document.body.appendChild(root);
+        this.staminaUI = { root, barFill };
+    }
+
+    _updateStaminaUI(isSprinting) {
+        if (!this.staminaUI?.barFill) return;
+        const pct = THREE.MathUtils.clamp((this.stamina || 0) / STAMINA_MAX, 0, 1);
+        this.staminaUI.barFill.style.width = `${Math.round(pct * 100)}%`;
+        this.staminaUI.barFill.style.background = isSprinting
+            ? 'linear-gradient(90deg,#ff9c63,#ff5454)'
+            : 'linear-gradient(90deg,#52d97f,#e5c44a)';
     }
 
     _createLabel(text, parent) {
@@ -1809,8 +1946,10 @@ export class Game3D {
 
     // =================== ENEMIES ===================
     _spawnEnemies() {
+        const allowedTypes = new Set(['slime', 'skeleton', 'darkmage', 'kraken']);
         const defs = [...MOBS];
         defs
+            .filter((def) => allowedTypes.has(def.type))
             .filter((def) => !ARENA_MODE || !this._isInsideArenaProtectedZone(def.x, def.z))
             .forEach(def => this._spawnMob(def));
     }
@@ -2452,7 +2591,7 @@ export class Game3D {
         }
     }
 
-    _ranged(pos, angle, dmg, color, speed, lifespan, isLocal) {
+    _ranged(pos, angle, dmg, color, speed, lifespan, isLocal, owner = 'player') {
         const proj = new THREE.Group();
         const projectileType = color === 0xE040FB ? 'mage' : 'archer';
 
@@ -2523,6 +2662,7 @@ export class Game3D {
             mesh: proj, vx: Math.sin(angle) * speed, vz: Math.cos(angle) * speed,
             dmg, isLocal, born: performance.now(), life: lifespan, type: projectileType,
             worldRadius: PROJECTILE_WORLD_RADIUS[projectileType] || 1.2,
+            owner,
         });
     }
 
@@ -3240,6 +3380,7 @@ export class Game3D {
         this._updateCombatCamera(dt);
         this._updateScreenEffects();
         this._updatePhysics(dt);
+        this._updateBillboardBars();
 
         // Third-Person Over-the-Shoulder Camera logic
         if (this.playerModel) {
@@ -3279,6 +3420,7 @@ export class Game3D {
         let isMoving = false;
         let forwardAxis = 0;
         let strafeAxis = 0;
+        const now = performance.now();
 
         // Space to jump
         if (this.keys['Space'] && !this.user.isJumping) {
@@ -3291,6 +3433,21 @@ export class Game3D {
         // Natural FPS strafe mapping.
         if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis += 1;
         if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis -= 1;
+        const hasMoveInput = forwardAxis !== 0 || strafeAxis !== 0;
+
+        let isSprinting = false;
+        const sprintRequested = hasMoveInput && this.keys['ShiftLeft'] && forwardAxis > 0;
+        if (sprintRequested && this.stamina > 0.2) {
+            isSprinting = true;
+            this.lastSprintAt = now;
+            this.stamina = Math.max(0, this.stamina - STAMINA_DRAIN_PER_SEC * dt);
+        } else {
+            const canRecover = !hasMoveInput
+                || (!this.keys['ShiftLeft'] && (now - this.lastSprintAt) > STAMINA_RECOVER_DELAY_MS);
+            if (canRecover) {
+                this.stamina = Math.min(STAMINA_MAX, this.stamina + STAMINA_RECOVER_PER_SEC * dt);
+            }
+        }
 
         if (!Number.isFinite(this.lookYaw)) this.lookYaw = this.playerModel.rotation.y;
         if (Math.abs(this.mouseTurnDelta) > 0.0001) {
@@ -3308,15 +3465,16 @@ export class Game3D {
             const forwardZ = Math.cos(rot);
             const rightX = Math.sin(rot + Math.PI * 0.5);
             const rightZ = Math.cos(rot + Math.PI * 0.5);
+            const lateralAxis = strafeAxis * STRAFE_SPEED_MULT;
 
-            moveX = (forwardX * forwardAxis) + (rightX * strafeAxis);
-            moveZ = (forwardZ * forwardAxis) + (rightZ * strafeAxis);
+            moveX = (forwardX * forwardAxis) + (rightX * lateralAxis);
+            moveZ = (forwardZ * forwardAxis) + (rightZ * lateralAxis);
             const len = Math.hypot(moveX, moveZ) || 1;
             moveX /= len;
             moveZ /= len;
 
             isMoving = true;
-            const spd = this.playerSpeed * dt * (this.keys['ShiftLeft'] ? 1.5 : 1.0);
+            const spd = this.playerSpeed * dt * (isSprinting ? SPRINT_SPEED_MULT : 1.0);
             const nextX = this.playerModel.position.x + moveX * spd;
             const nextZ = this.playerModel.position.z + moveZ * spd;
             const resolved = this._resolveArenaCollision(nextX, nextZ, PLAYER_COLLIDER_RADIUS);
@@ -3364,7 +3522,7 @@ export class Game3D {
                     if (forwardAxis < -0.2) {
                         targetAnimName = 'walk';
                     } else {
-                        targetAnimName = this.keys['ShiftLeft'] ? 'run' : 'walk';
+                        targetAnimName = isSprinting ? 'run' : 'walk';
                     }
                 }
                 this._setCharacterAnim(this.playerModel, targetAnimName);
@@ -3373,9 +3531,8 @@ export class Game3D {
 
         // HP bar
         const pct = (this.user.hp || 100) / (this.user.max_hp || 100);
-        this.hpBar.fillMesh.scale.x = Math.max(0.01, pct);
-        this.hpBar.fillMesh.position.x = -this.hpBar.maxW * (1 - pct) / 2;
-        this.hpBar.fillMesh.material.color.setHex(pct > 0.5 ? 0x4CAF50 : pct > 0.25 ? 0xFFC107 : 0xFF4B4B);
+        this._setHPBarValue(this.hpBar, pct);
+        this._updateStaminaUI(isSprinting);
     }
 
     _updateEnemyAI(dt) {
@@ -3396,46 +3553,71 @@ export class Game3D {
 
             if (dist < e.def.range) {
                 e.isChasing = true;
-                // Chase (with leg debuff check)
                 const a = Math.atan2(px - ex, pz - ez);
                 const legSlow = (e._legDebuff && now < e._legDebuff) ? 0.3 : 1.0;
                 const moveSpd = e.def.spd * dt * legSlow;
-                e.model.position.x += Math.sin(a) * moveSpd;
-                e.model.position.z += Math.cos(a) * moveSpd;
                 e.model.rotation.y = a;
 
-                // === CHASE ANIMATIONS PER MOB TYPE ===
-                if (e.model.userData.mixer) {
-                    this._playGLBAnim(e, 'run');
-                } else {
-                    this._animateMobChase(e, parts, type, t, dt, dist);
-                }
-
-                // Melee
-                if (dist < (e.def.isBoss ? 40 : 20) && now - e.lastAtk > 1200) {
-                    e.lastAtk = now;
-                    e.attackAnim = 1.0; // Start attack animation
-                    const armWeak = (e._armDebuff && now < e._armDebuff) ? 0.6 : 1.0;
-                    let dmg = Math.max(1, Math.round((e.def.atk * armWeak) - (this.user.defense || 5)));
-                    if (this.isBlocking) {
-                        dmg = Math.round(dmg * 0.4);
-                        this._floatDmg(this.playerModel.position, 'BLOCKED', '#44AAFF');
-                        this.shakeIntensity = 1;
-                        this._triggerScreenFlash('#4488FF', 100);
-                    } else {
-                        this.shakeIntensity = e.def.isBoss ? 8 : 4;
-                        this._triggerScreenFlash('#FF0000', 200);
-                        this._triggerHitFreeze(40);
+                if (type === 'darkmage') {
+                    const keepMin = 120;
+                    const keepMax = Math.max(180, e.def.range * 0.82);
+                    let motion = 0;
+                    if (dist > keepMax) motion = 1;
+                    else if (dist < keepMin) motion = -1;
+                    if (motion !== 0) {
+                        e.model.position.x += Math.sin(a) * moveSpd * motion * 0.9;
+                        e.model.position.z += Math.cos(a) * moveSpd * motion * 0.9;
                     }
-                    this.user.hp = Math.max(0, (this.user.hp || 100) - dmg);
-                    this._floatDmg(this.playerModel.position, dmg, '#FF4B4B');
-                    if (window.updateHUD) window.updateHUD();
-                    if (this.user.hp <= 0) {
-                        this._triggerSlowMo(0.5, 0.1);
-                        this._triggerScreenFlash('#FF0000', 500);
-                        this.user.hp = this.user.max_hp || 100;
-                        this.playerModel.position.set(1500, 0, 1500);
-                        this._showNotification('💀 Ты погиб!');
+
+                    if (e.model.userData.mixer) {
+                        this._playGLBAnim(e, motion !== 0 ? 'walk' : 'idle');
+                    } else {
+                        this._animateMobIdle(e, parts, type, t, dt, false);
+                    }
+
+                    if (dist > 80 && dist < e.def.range && now - e.lastAtk > 1500) {
+                        e.lastAtk = now;
+                        e.attackAnim = 1.0;
+                        const armWeak = (e._armDebuff && now < e._armDebuff) ? 0.6 : 1.0;
+                        const spellDmg = Math.max(2, Math.round((e.def.atk * armWeak) - ((this.user.defense || 5) * 0.28)));
+                        this._ranged({ x: ex, z: ez }, a, spellDmg, 0xE040FB, 260, 2300, false, 'enemy');
+                    }
+                } else {
+                    // Melee mobs chase and strike in close range.
+                    e.model.position.x += Math.sin(a) * moveSpd;
+                    e.model.position.z += Math.cos(a) * moveSpd;
+
+                    if (e.model.userData.mixer) {
+                        this._playGLBAnim(e, 'run');
+                    } else {
+                        this._animateMobChase(e, parts, type, t, dt, dist);
+                    }
+
+                    if (dist < (e.def.isBoss ? 40 : 20) && now - e.lastAtk > 1200) {
+                        e.lastAtk = now;
+                        e.attackAnim = 1.0; // Start attack animation
+                        const armWeak = (e._armDebuff && now < e._armDebuff) ? 0.6 : 1.0;
+                        let dmg = Math.max(1, Math.round((e.def.atk * armWeak) - (this.user.defense || 5)));
+                        if (this.isBlocking) {
+                            dmg = Math.round(dmg * 0.4);
+                            this._floatDmg(this.playerModel.position, 'BLOCKED', '#44AAFF');
+                            this.shakeIntensity = 1;
+                            this._triggerScreenFlash('#4488FF', 100);
+                        } else {
+                            this.shakeIntensity = e.def.isBoss ? 8 : 4;
+                            this._triggerScreenFlash('#FF0000', 200);
+                            this._triggerHitFreeze(40);
+                        }
+                        this.user.hp = Math.max(0, (this.user.hp || 100) - dmg);
+                        this._floatDmg(this.playerModel.position, dmg, '#FF4B4B');
+                        if (window.updateHUD) window.updateHUD();
+                        if (this.user.hp <= 0) {
+                            this._triggerSlowMo(0.5, 0.1);
+                            this._triggerScreenFlash('#FF0000', 500);
+                            this.user.hp = this.user.max_hp || 100;
+                            this.playerModel.position.set(1500, 0, 1500);
+                            this._showNotification('💀 Ты погиб!');
+                        }
                     }
                 }
             } else {
@@ -3477,9 +3659,7 @@ export class Game3D {
 
             // HP bar
             const pct = e.hp / e.maxHp;
-            e.hpBar.fillMesh.scale.x = Math.max(0.01, pct);
-            e.hpBar.fillMesh.position.x = -e.hpBar.maxW * (1 - pct) / 2;
-            e.hpBar.fillMesh.material.color.setHex(pct > 0.5 ? 0x4CAF50 : pct > 0.25 ? 0xFFC107 : 0xFF4B4B);
+            this._setHPBarValue(e.hpBar, pct);
         });
     }
 
@@ -3959,7 +4139,32 @@ export class Game3D {
             }
 
             // Hit check
-            if (p.isLocal) {
+            if (p.owner === 'enemy') {
+                const hitDist = 13;
+                if (Math.hypot(this.playerModel.position.x - p.mesh.position.x, this.playerModel.position.z - p.mesh.position.z) < hitDist) {
+                    let dmg = Math.max(1, Math.round((p.dmg || 1) - ((this.user.defense || 5) * 0.22)));
+                    if (this.isBlocking) {
+                        dmg = Math.max(1, Math.round(dmg * 0.45));
+                        this._floatDmg(this.playerModel.position, 'BLOCKED', '#44AAFF');
+                    } else {
+                        this._triggerScreenFlash('#C56CFF', 140);
+                        this._triggerHitFreeze(28);
+                    }
+                    this.user.hp = Math.max(0, (this.user.hp || 100) - dmg);
+                    this._floatDmg(this.playerModel.position, dmg, '#FF6BC8');
+                    if (window.updateHUD) window.updateHUD();
+                    if (this.user.hp <= 0) {
+                        this._triggerScreenFlash('#FF0000', 450);
+                        this.user.hp = this.user.max_hp || 100;
+                        this.playerModel.position.set(1500, 0, 1500);
+                        this._showNotification('💀 Ты погиб!');
+                    }
+                    this._spawnProjectileWorldImpact(p);
+                    this.scene.remove(p.mesh);
+                    this.projectiles.splice(i, 1);
+                    continue;
+                }
+            } else if (p.isLocal) {
                 let consumed = false;
 
                 for (const [rawId, model] of Object.entries(this.others)) {
