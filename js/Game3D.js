@@ -1019,43 +1019,102 @@ export class Game3D {
     }
 
     _buildPerimeterBarrier() {
-        const inset = 84;
-        const wallH = 210;
-        const wallT = 34;
-        const segMat = new THREE.MeshStandardMaterial({
-            color: 0x6a6257,
-            roughness: 0.94,
-            metalness: 0.01,
-        });
-        const capMat = new THREE.MeshStandardMaterial({
-            color: 0x877c6d,
+        const inset = 88;
+        const wallH = 176;
+        const wallT = 30;
+        const baseH = 34;
+        const crownH = 12;
+        const crenelH = 14;
+        const towerR = 56;
+        const towerH = wallH + 36;
+        const texLoader = new THREE.TextureLoader();
+        const aniso = this.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+        const wallMap = this._loadTiledTexture(texLoader, ARENA_TEXTURES.wallMap, 26, 2, true, aniso);
+        const wallBump = this._loadTiledTexture(texLoader, ARENA_TEXTURES.wallBump, 26, 2, false, aniso);
+
+        const wallMat = new THREE.MeshStandardMaterial({
+            map: wallMap,
+            bumpMap: wallBump,
+            bumpScale: 0.6,
+            color: 0xc7beb0,
             roughness: 0.9,
             metalness: 0.02,
         });
+        const baseMat = new THREE.MeshStandardMaterial({ color: 0x7f7468, roughness: 0.93, metalness: 0.01 });
+        const crownMat = new THREE.MeshStandardMaterial({ color: 0xd4c9b7, roughness: 0.88, metalness: 0.02 });
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0x5b5046, roughness: 0.86, metalness: 0.03 });
 
-        const mkWall = (x, z, w, d) => {
-            const baseY = this._getTerrainHeight(x, z);
-            const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, d), segMat);
-            wall.position.set(x, baseY + wallH * 0.5 - 8, z);
+        const addWallSide = (x, z, w, d, isHorizontal) => {
+            const y = this._getTerrainHeight(x, z);
+
+            const base = new THREE.Mesh(new THREE.BoxGeometry(w * 1.01, baseH, d * 1.18), baseMat);
+            base.position.set(x, y + baseH * 0.5 - 8, z);
+            base.castShadow = false;
+            base.receiveShadow = true;
+            this.scene.add(base);
+
+            const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, d), wallMat);
+            wall.position.set(x, y + baseH + wallH * 0.5 - 10, z);
             wall.castShadow = false;
             wall.receiveShadow = true;
             this.scene.add(wall);
 
-            const cap = new THREE.Mesh(new THREE.BoxGeometry(w * 1.02, 12, d * 1.02), capMat);
-            cap.position.set(x, wall.position.y + wallH * 0.5 + 5, z);
-            cap.castShadow = false;
-            cap.receiveShadow = true;
-            this.scene.add(cap);
+            const crown = new THREE.Mesh(new THREE.BoxGeometry(w * 1.02, crownH, d * 1.2), crownMat);
+            crown.position.set(x, y + baseH + wallH + crownH * 0.5 - 9, z);
+            crown.castShadow = false;
+            crown.receiveShadow = true;
+            this.scene.add(crown);
+
+            // Crenellations: low count, strong silhouette.
+            const span = isHorizontal ? w : d;
+            const merlonCount = Math.max(10, Math.round(span / 220));
+            const merlonStep = span / merlonCount;
+            const merlonW = isHorizontal ? merlonStep * 0.58 : d * 0.96;
+            const merlonD = isHorizontal ? d * 0.96 : merlonStep * 0.58;
+            for (let i = 0; i < merlonCount; i++) {
+                const t = (i + 0.5) / merlonCount;
+                const lx = isHorizontal ? (-w * 0.5 + t * w) : 0;
+                const lz = isHorizontal ? 0 : (-d * 0.5 + t * d);
+                const merlon = new THREE.Mesh(new THREE.BoxGeometry(merlonW, crenelH, merlonD), crownMat);
+                merlon.position.set(
+                    x + lx,
+                    y + baseH + wallH + crownH + crenelH * 0.5 - 9,
+                    z + lz
+                );
+                merlon.castShadow = false;
+                merlon.receiveShadow = true;
+                this.scene.add(merlon);
+            }
+
+            // Buttresses to break monotony.
+            const buttressCount = Math.max(4, Math.round(span / 360));
+            for (let i = 0; i < buttressCount; i++) {
+                const t = (i + 0.5) / buttressCount;
+                const lx = isHorizontal ? (-w * 0.5 + t * w) : 0;
+                const lz = isHorizontal ? 0 : (-d * 0.5 + t * d);
+                const butt = new THREE.Mesh(
+                    new THREE.BoxGeometry(isHorizontal ? 18 : 22, wallH * 0.6, isHorizontal ? 22 : 18),
+                    baseMat
+                );
+                const outward = isHorizontal ? Math.sign(z - MAP * 0.5) : Math.sign(x - MAP * 0.5);
+                butt.position.set(
+                    x + lx + (isHorizontal ? 0 : outward * 10),
+                    y + baseH + wallH * 0.3 - 10,
+                    z + lz + (isHorizontal ? outward * 10 : 0)
+                );
+                butt.castShadow = false;
+                butt.receiveShadow = true;
+                this.scene.add(butt);
+            }
         };
 
         const span = MAP - inset * 2;
-        mkWall(MAP * 0.5, inset, span, wallT);
-        mkWall(MAP * 0.5, MAP - inset, span, wallT);
-        mkWall(inset, MAP * 0.5, wallT, span);
-        mkWall(MAP - inset, MAP * 0.5, wallT, span);
+        addWallSide(MAP * 0.5, inset, span, wallT, true);
+        addWallSide(MAP * 0.5, MAP - inset, span, wallT, true);
+        addWallSide(inset, MAP * 0.5, wallT, span, false);
+        addWallSide(MAP - inset, MAP * 0.5, wallT, span, false);
 
-        // Corner bastions to hide seams and make shape look intentional.
-        const cornerR = 64;
+        // Corner towers for cleaner, believable transitions.
         const corners = [
             [inset, inset],
             [MAP - inset, inset],
@@ -1063,20 +1122,26 @@ export class Game3D {
             [MAP - inset, MAP - inset],
         ];
         corners.forEach(([x, z]) => {
-            const baseY = this._getTerrainHeight(x, z);
-            const bastion = new THREE.Mesh(new THREE.CylinderGeometry(cornerR, cornerR * 1.12, wallH + 36, 10), segMat);
-            bastion.position.set(x, baseY + (wallH + 36) * 0.5 - 10, z);
-            bastion.castShadow = false;
-            bastion.receiveShadow = true;
-            this.scene.add(bastion);
-            this._addArenaCircleCollider(x, z, cornerR * 0.9);
+            const y = this._getTerrainHeight(x, z);
+            const tower = new THREE.Mesh(new THREE.CylinderGeometry(towerR, towerR * 1.08, towerH, 12), wallMat);
+            tower.position.set(x, y + towerH * 0.5 - 10, z);
+            tower.castShadow = false;
+            tower.receiveShadow = true;
+            this.scene.add(tower);
+
+            const roof = new THREE.Mesh(new THREE.ConeGeometry(towerR * 0.9, 42, 12), roofMat);
+            roof.position.set(x, tower.position.y + towerH * 0.5 + 16, z);
+            roof.castShadow = false;
+            roof.receiveShadow = true;
+            this.scene.add(roof);
+            this._addArenaCircleCollider(x, z, towerR * 0.88);
         });
 
         // Continuous collision ring with no gaps.
-        this._addLineColliders(inset, inset, MAP - inset, inset, wallT * 0.6, 1.05);
-        this._addLineColliders(MAP - inset, inset, MAP - inset, MAP - inset, wallT * 0.6, 1.05);
-        this._addLineColliders(MAP - inset, MAP - inset, inset, MAP - inset, wallT * 0.6, 1.05);
-        this._addLineColliders(inset, MAP - inset, inset, inset, wallT * 0.6, 1.05);
+        this._addLineColliders(inset, inset, MAP - inset, inset, wallT * 0.7, 1.02);
+        this._addLineColliders(MAP - inset, inset, MAP - inset, MAP - inset, wallT * 0.7, 1.02);
+        this._addLineColliders(MAP - inset, MAP - inset, inset, MAP - inset, wallT * 0.7, 1.02);
+        this._addLineColliders(inset, MAP - inset, inset, inset, wallT * 0.7, 1.02);
     }
 
     _scatterForestCluster(cx, cz, radius, count, color, type) {
