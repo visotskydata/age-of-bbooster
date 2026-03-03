@@ -77,14 +77,20 @@ export class HUDController {
         const user = this.userState.get();
         const container = document.getElementById('stats-content');
         if (!container || !user) return;
+        const level = user.level || 1;
+        const xp = user.xp || 0;
+        const xpToNext = 130 + Math.round((Math.max(1, level) - 1) * 70);
+        const abilityState = level >= 3 ? 'RMB-способность открыта' : 'Откроется на 3 уровне';
 
         container.innerHTML = `
             <div class="stats-row"><span class="stats-label">Класс</span><span class="stats-value">${CLASS_ICONS[user.class] || '❓'} ${user.class || 'Не выбран'}</span></div>
-            <div class="stats-row"><span class="stats-label">Уровень</span><span class="stats-value">${user.level || 1}</span></div>
+            <div class="stats-row"><span class="stats-label">Уровень</span><span class="stats-value">${level}</span></div>
+            <div class="stats-row"><span class="stats-label">⭐ XP</span><span class="stats-value">${xp} / ${xpToNext}</span></div>
             <div class="stats-row"><span class="stats-label">❤️ HP</span><span class="stats-value">${user.hp || 100} / ${user.max_hp || 100}</span></div>
             <div class="stats-row"><span class="stats-label">⚔️ Атака</span><span class="stats-value">${user.attack || 10}</span></div>
             <div class="stats-row"><span class="stats-label">🛡️ Защита</span><span class="stats-value">${user.defense || 5}</span></div>
             <div class="stats-row"><span class="stats-label">👟 Скорость</span><span class="stats-value">${user.speed || 200}</span></div>
+            <div class="stats-row"><span class="stats-label">✨ Способность</span><span class="stats-value">${abilityState}</span></div>
         `;
     }
 

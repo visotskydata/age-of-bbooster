@@ -13,12 +13,12 @@ import { dbSync, initRealtime, broadcastAttack, broadcastMobHit, broadcastPlayer
 const MAP = 3000;
 const CAM_H = 350, CAM_DIST = 280;
 const CLASS_SPEED = { warrior: 60, mage: 70, archer: 85 };
-const CLASS_ATK_CD = { warrior: 450, mage: 900, archer: 650 };
+const CLASS_ATK_CD = { warrior: 520, mage: 820, archer: 620 };
 const CLASS_DMG = { warrior: 20, mage: 28, archer: 16 };
 const ARENA_MODE = true;
 const PVP_MELEE_RANGE = 24;
 const PVP_RANGED_RANGE = 14;
-const PVP_RESPAWN_MS = 3500;
+const PVP_RESPAWN_MS = 10000;
 const PVP_RESPAWN_PROTECTION_MS = 2500;
 const PVP_HIT_COOLDOWN_MS = 220;
 const PVP_DMG_SCALE = 0.85;
@@ -53,6 +53,19 @@ const DASH_DURATION_MS = { warrior: 270, archer: 320 };
 const BLOOD_COLOR = 0x6f0b10;
 const BLOOD_PARTICLE_GRAVITY = 26;
 const BLOOD_POOL_LIFETIME_MS = 38000;
+const ABILITY_UNLOCK_LEVEL = 3;
+const ARENA_PASSIVE_XP_INTERVAL_MS = 1000;
+const ARENA_PASSIVE_XP = 1;
+const MOB_KILL_XP_MULT = 0.8;
+const PLAYER_KILL_XP = 110;
+const GHOST_MOVE_SPEED_MULT = 1.2;
+const MAGE_BURN_COOLDOWN_MS = 5000;
+const MAGE_BURN_DURATION_MS = 10000;
+const MAGE_BURN_TICK_MS = 1000;
+const WARRIOR_WHIRL_COOLDOWN_MS = 18000;
+const WARRIOR_WHIRL_DURATION_MS = 10000;
+const WARRIOR_WHIRL_TICK_MS = 1000;
+const ARCHER_POWERSHOT_COOLDOWN_MS = 4500;
 const PREMIUM_MANIFEST_URL = 'assets/premium/manifest.json';
 const CLASS_ACTIONS = {
     warrior: {
@@ -170,6 +183,7 @@ export class Game3D {
         this.playerGroundOffset = 0;
         this.isDead = false;
         this.deadUntil = 0;
+        this.isGhost = false;
         this.spawnProtectedUntil = performance.now() + PVP_RESPAWN_PROTECTION_MS;
         this.remoteProtectedUntil = {};
         this.pvpLastHitSentAt = {};
@@ -194,6 +208,17 @@ export class Game3D {
         this.bloodPools = [];
         this.playerBleedingUntil = 0;
         this.playerNextBleedAt = 0;
+        this.nextArenaXpAt = performance.now() + ARENA_PASSIVE_XP_INTERVAL_MS;
+        this.abilityCooldowns = {
+            warriorWhirlReadyAt: 0,
+            mageBurnReadyAt: 0,
+            archerPowerReadyAt: 0,
+        };
+        this.warriorWhirlState = null;
+        this.remoteBurnEffects = {};
+        this.abilityUI = null;
+        this.ghostUI = null;
+        this._ghostVisualActive = false;
 
         this._init();
         this._initPhysics();
@@ -1696,7 +1721,7 @@ export class Game3D {
 
         // Dummy references for existing logic
         g.userData.parts = { root: g };
-        g.userData.swingState = { active: false, time: 0, direction: 'right', combo: 0 };
+        g.userData.swingState = { active: false, time: 0, direction: 'right' };
 
         return g;
     }
@@ -1973,6 +1998,7 @@ export class Game3D {
 
     // =================== PLAYER ===================
     _spawnPlayer() {
+        this._ensureCombatStats();
         const cls = this.user.class || 'warrior';
         this.playerModel = this._charModel(cls);
         this.playerGroundOffset = this._computeModelGroundOffset(this.playerModel);
@@ -1980,7 +2006,7 @@ export class Game3D {
         const startZ = this.user.y || 1500;
         this.playerModel.position.set(startX, this._getPlayerGroundTargetY(startX, startZ), startZ);
         this.scene.add(this.playerModel);
-        this.playerSpeed = CLASS_SPEED[cls] || 140;
+        this._refreshDerivedStats();
         this.lookYaw = this.playerModel.rotation.y;
 
         // HP bar (world-space)
@@ -1989,10 +2015,100 @@ export class Game3D {
         this.hpBar.position.y = 22;
         this._ensureCrosshairUI();
         this._ensureStaminaUI();
+        this._ensureAbilityUI();
         this._updateStaminaUI(false);
+        this._updateAbilityUI();
 
         // Name label (CSS2D alternative: create a div)
         this._createLabel(this.user.login, this.playerModel);
+    }
+
+    _getClassBaseStats(cls) {
+        const key = cls || 'warrior';
+        if (key === 'mage') return { max_hp: 90, attack: 18, defense: 5, speed: 200 };
+        if (key === 'archer') return { max_hp: 100, attack: 12, defense: 7, speed: 240 };
+        return { max_hp: 120, attack: 15, defense: 10, speed: 180 };
+    }
+
+    _getClassGrowth(cls) {
+        const key = cls || 'warrior';
+        if (key === 'mage') return { hp: 12, attack: 4, defense: 2, speed: 5 };
+        if (key === 'archer') return { hp: 14, attack: 3, defense: 2, speed: 6 };
+        return { hp: 16, attack: 3, defense: 2, speed: 4 };
+    }
+
+    _getXpToNextLevel(level) {
+        const lv = Math.max(1, Math.floor(level || 1));
+        return 130 + Math.round((lv - 1) * 70);
+    }
+
+    _ensureCombatStats() {
+        const cls = this.user.class || 'warrior';
+        const base = this._getClassBaseStats(cls);
+        if (!Number.isFinite(this.user.level)) this.user.level = 1;
+        if (!Number.isFinite(this.user.xp)) this.user.xp = 0;
+        if (!Number.isFinite(this.user.max_hp) || this.user.max_hp <= 0) this.user.max_hp = base.max_hp;
+        if (!Number.isFinite(this.user.attack) || this.user.attack <= 0) this.user.attack = base.attack;
+        if (!Number.isFinite(this.user.defense) || this.user.defense < 0) this.user.defense = base.defense;
+        if (!Number.isFinite(this.user.speed) || this.user.speed <= 0) this.user.speed = base.speed;
+        if (!Number.isFinite(this.user.hp) || this.user.hp <= 0) {
+            this.user.hp = this.user.max_hp;
+        } else {
+            this.user.hp = Math.min(this.user.hp, this.user.max_hp);
+        }
+    }
+
+    _refreshDerivedStats() {
+        const cls = this.user.class || 'warrior';
+        const baseSpeed = CLASS_SPEED[cls] || 70;
+        const speedStat = Number(this.user.speed) || (this._getClassBaseStats(cls).speed || 200);
+        this.playerSpeed = Math.max(baseSpeed, speedStat * 0.35);
+    }
+
+    _grantXp(amount, reason = 'combat', opts = {}) {
+        const gain = Math.max(0, Math.round(amount || 0));
+        if (gain <= 0) return 0;
+        this._ensureCombatStats();
+        this.user.xp = (this.user.xp || 0) + gain;
+        let levelsGained = 0;
+        let guard = 0;
+        while (guard++ < 20) {
+            const need = this._getXpToNextLevel(this.user.level || 1);
+            if ((this.user.xp || 0) < need) break;
+            this.user.xp -= need;
+            this._levelUp(reason);
+            levelsGained += 1;
+        }
+        if (window.updateHUD) window.updateHUD();
+        if (!opts.silent && levelsGained === 0 && gain >= 10) {
+            this._floatDmg(this.playerModel.position, gain, '#4FC3F7', 'XP');
+        }
+        return levelsGained;
+    }
+
+    _levelUp(reason = 'combat') {
+        const cls = this.user.class || 'warrior';
+        const growth = this._getClassGrowth(cls);
+        this.user.level = (this.user.level || 1) + 1;
+        this.user.max_hp = Math.round((this.user.max_hp || 100) + growth.hp);
+        this.user.attack = Math.round((this.user.attack || 10) + growth.attack);
+        this.user.defense = Math.round((this.user.defense || 5) + growth.defense);
+        this.user.speed = Math.round((this.user.speed || 200) + growth.speed);
+        this.user.hp = this.user.max_hp;
+        this._refreshDerivedStats();
+        this._triggerScreenFlash('#D7F9FF', 180);
+        this._showNotification(`✨ Уровень ${this.user.level}! ${reason === 'arena' ? 'Арена' : 'Бой'} усилил тебя.`);
+        if ((this.user.level || 1) === ABILITY_UNLOCK_LEVEL) {
+            this._showNotification('🔓 RMB-способность разблокирована!');
+        }
+        this._updateAbilityUI();
+    }
+
+    _canUseClassAbility() {
+        const level = this.user.level || 1;
+        if (level >= ABILITY_UNLOCK_LEVEL) return true;
+        this._showNotification(`🔒 RMB-способность откроется на ${ABILITY_UNLOCK_LEVEL} уровне.`);
+        return false;
     }
 
     _computeModelGroundOffset(model) {
@@ -2203,6 +2319,107 @@ export class Game3D {
         this.staminaUI.dashState.style.color = labelColor;
     }
 
+    _ensureAbilityUI() {
+        if (this.abilityUI?.root?.isConnected) return;
+        const root = document.createElement('div');
+        root.style.cssText = [
+            'position:fixed',
+            'left:22px',
+            'bottom:126px',
+            'width:220px',
+            'z-index:9999',
+            'pointer-events:none',
+            'font:600 12px Inter, sans-serif',
+            'color:#e7ecf6',
+            'text-shadow:0 1px 2px rgba(0,0,0,.75)',
+        ].join(';');
+
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:4px;';
+
+        const title = document.createElement('div');
+        title.textContent = 'RMB ABILITY';
+        title.style.cssText = 'letter-spacing:.8px;opacity:.9;';
+
+        const state = document.createElement('div');
+        state.textContent = 'LOCKED';
+        state.style.cssText = 'font-size:10px;letter-spacing:.5px;color:#ffb8b8;opacity:.95;';
+
+        row.append(title, state);
+
+        const name = document.createElement('div');
+        name.style.cssText = 'font-size:11px;opacity:.85;margin-bottom:4px;';
+        name.textContent = '...';
+
+        const barBg = document.createElement('div');
+        barBg.style.cssText = 'height:8px;border-radius:999px;background:rgba(15,22,30,.8);border:1px solid rgba(255,255,255,.12);overflow:hidden;';
+        const barFill = document.createElement('div');
+        barFill.style.cssText = 'height:100%;width:0%;background:linear-gradient(90deg,#ffc67c,#ff865a);transition:width .08s linear, background .12s linear;';
+        barBg.appendChild(barFill);
+
+        root.append(row, name, barBg);
+        document.body.appendChild(root);
+        this.abilityUI = { root, state, name, barFill };
+    }
+
+    _updateAbilityUI() {
+        if (!this.abilityUI?.root) return;
+        const cls = this.user.class || 'warrior';
+        const level = this.user.level || 1;
+        const now = performance.now();
+
+        const labels = {
+            warrior: 'Вихрь',
+            mage: 'Огненный шар',
+            archer: 'Пробивной выстрел',
+        };
+        const readyAt = cls === 'warrior'
+            ? this.abilityCooldowns.warriorWhirlReadyAt
+            : cls === 'mage'
+                ? this.abilityCooldowns.mageBurnReadyAt
+                : this.abilityCooldowns.archerPowerReadyAt;
+        const cooldownMs = cls === 'warrior'
+            ? WARRIOR_WHIRL_COOLDOWN_MS
+            : cls === 'mage'
+                ? MAGE_BURN_COOLDOWN_MS
+                : ARCHER_POWERSHOT_COOLDOWN_MS;
+
+        this.abilityUI.name.textContent = labels[cls] || 'Способность';
+
+        if (level < ABILITY_UNLOCK_LEVEL) {
+            this.abilityUI.state.textContent = `LOCKED Lv.${ABILITY_UNLOCK_LEVEL}`;
+            this.abilityUI.state.style.color = '#ffb8b8';
+            this.abilityUI.barFill.style.width = `${Math.round((level / ABILITY_UNLOCK_LEVEL) * 100)}%`;
+            this.abilityUI.barFill.style.background = 'linear-gradient(90deg,#ff9b9b,#ff6868)';
+            return;
+        }
+
+        if (cls === 'warrior' && this.warriorWhirlState?.active) {
+            const left = Math.max(0, this.warriorWhirlState.until - now);
+            const pct = THREE.MathUtils.clamp(left / WARRIOR_WHIRL_DURATION_MS, 0, 1);
+            this.abilityUI.state.textContent = `ACTIVE ${(left / 1000).toFixed(1)}s`;
+            this.abilityUI.state.style.color = '#9dd8ff';
+            this.abilityUI.barFill.style.width = `${Math.round(pct * 100)}%`;
+            this.abilityUI.barFill.style.background = 'linear-gradient(90deg,#8fd6ff,#4ca9ff)';
+            return;
+        }
+
+        const left = Math.max(0, (readyAt || 0) - now);
+        if (left > 0) {
+            const pct = 1 - THREE.MathUtils.clamp(left / cooldownMs, 0, 1);
+            this.abilityUI.state.textContent = `CD ${(left / 1000).toFixed(1)}s`;
+            this.abilityUI.state.style.color = '#ffd27f';
+            this.abilityUI.barFill.style.width = `${Math.round(pct * 100)}%`;
+            this.abilityUI.barFill.style.background = 'linear-gradient(90deg,#ffd58f,#ff9866)';
+            return;
+        }
+
+        this.abilityUI.state.textContent = 'READY';
+        this.abilityUI.state.style.color = '#8ff2ab';
+        this.abilityUI.barFill.style.width = '100%';
+        this.abilityUI.barFill.style.background = 'linear-gradient(90deg,#7cf29d,#4de273)';
+    }
+
     _resolveAndApplyPlayerMove(dx, dz) {
         const nextX = this.playerModel.position.x + dx;
         const nextZ = this.playerModel.position.z + dz;
@@ -2259,7 +2476,7 @@ export class Game3D {
     _tryStartDash(forwardAxis, strafeAxis) {
         const cls = this.user.class || 'warrior';
         if (!this.keys['ShiftLeft']) return false;
-        if (this.isDead || this.user.isJumping || this.dashState?.active) return false;
+        if (this.isDead || this.user.isJumping || this.dashState?.active || this.warriorWhirlState?.active) return false;
         if (performance.now() - this.lastDashAt < DASH_COOLDOWN_MS) return false;
 
         const dir = this._getDashDirection(forwardAxis, strafeAxis);
@@ -2415,8 +2632,12 @@ export class Game3D {
         document.addEventListener('keydown', e => {
             this.keys[e.code] = true;
             if (e.code === 'Space' && !e.repeat) this.dashRequested = true;
+            if (e.code === 'KeyQ' && !e.repeat) this._startBlock();
         });
-        document.addEventListener('keyup', e => { this.keys[e.code] = false; });
+        document.addEventListener('keyup', e => {
+            this.keys[e.code] = false;
+            if (e.code === 'KeyQ') this._endBlock();
+        });
 
         // Mouse tracking for directional swings
         this.mouseVelocity = { x: 0, y: 0 };
@@ -2439,14 +2660,10 @@ export class Game3D {
 
         this.renderer.domElement.addEventListener('mousedown', e => {
             if (e.button === 0) this._attack();
-            if (e.button === 2) this._startBlock();
+            if (e.button === 2) this._useClassAbility();
             if (document.pointerLockElement !== this.renderer.domElement) {
                 this.renderer.domElement.requestPointerLock?.();
             }
-        });
-
-        this.renderer.domElement.addEventListener('mouseup', e => {
-            if (e.button === 2) this._endBlock();
         });
 
         this.renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
@@ -2488,15 +2705,6 @@ export class Game3D {
         const dirMult = { overhead: 1.5, thrust: 1.3, right: 1.0, left: 1.0 };
         const dmg = Math.round(baseDmg * (dirMult[swingDir] || 1));
 
-        // Combo tracking
-        const state = this.playerModel.userData.swingState;
-        if (now - (state.lastSwingTime || 0) < 1200) {
-            state.combo = Math.min((state.combo || 0) + 1, 3);
-        } else {
-            state.combo = 0;
-        }
-        state.lastSwingTime = now;
-        const comboDmg = Math.round(dmg * (1 + state.combo * 0.15));
         const classActionCfg = this.classActions[cls] || {};
 
         if (cls === 'warrior') {
@@ -2505,7 +2713,7 @@ export class Game3D {
             const impactDelay = oneShotMs > 0 ? Math.min(180, oneShotMs * 0.32) : 0;
             setTimeout(() => {
                 if (this.isDead) return;
-                this._melee(attackOrigin, angle, comboDmg, true, swingDir);
+                this._melee(attackOrigin, angle, dmg, true, swingDir);
                 this.shakeIntensity = 2;
                 this.lastSwingAngle = angle;
             }, impactDelay);
@@ -2514,25 +2722,133 @@ export class Game3D {
             const castDelay = oneShotMs > 0 ? Math.min(240, oneShotMs * 0.45) : 100;
             setTimeout(() => {
                 if (this.isDead) return;
-                this._ranged(attackOrigin, angle, comboDmg, 0x8D6E63, 460, 2200, true);
+                this._ranged(attackOrigin, angle, dmg, 0x8D6E63, 460, 2200, true);
             }, castDelay);
         } else {
             const oneShotMs = this._playOneShotAnim(this.playerModel, classActionCfg.cast || CLASS_ACTIONS.mage.cast, { minLockMs: 220, lockMult: 0.58 });
             const castDelay = oneShotMs > 0 ? Math.min(280, oneShotMs * 0.48) : 130;
             setTimeout(() => {
                 if (this.isDead) return;
-                this._ranged(attackOrigin, angle, comboDmg, 0xE040FB, 350, 2600, true);
+                this._ranged(attackOrigin, angle, dmg, 0xE040FB, 700, 2600, true);
             }, castDelay);
         }
 
-        // Show combo indicator
-        if (state.combo > 0) {
-            this._floatDmg(pos, `${state.combo + 1}x COMBO!`, '#FFD700');
-            // Slow-mo on max combo
-            if (state.combo >= 3) this._triggerSlowMo(0.3, 0.2);
+        broadcastAttack({
+            playerId: this.user.id,
+            cls,
+            attackType: 'basic',
+            x: Math.round(pos.x),
+            z: Math.round(pos.z),
+            angle,
+            swingDir,
+        });
+    }
+
+    _useClassAbility() {
+        if (this.isDead) return;
+        if (!this._canUseClassAbility()) return;
+
+        const now = performance.now();
+        const cls = this.user.class || 'warrior';
+        const pos = this.playerModel.position.clone();
+        const angle = this.playerModel.rotation.y;
+
+        if (cls === 'mage') {
+            const readyAt = this.abilityCooldowns.mageBurnReadyAt || 0;
+            if (now < readyAt) {
+                this._showNotification(`⏳ Огненный шар через ${((readyAt - now) / 1000).toFixed(1)}с`);
+                return;
+            }
+            this.abilityCooldowns.mageBurnReadyAt = now + MAGE_BURN_COOLDOWN_MS;
+            const oneShotMs = this._playOneShotAnim(this.playerModel, this.classActions.mage?.cast || CLASS_ACTIONS.mage.cast, { minLockMs: 180, lockMult: 0.45 });
+            const castDelay = oneShotMs > 0 ? Math.min(180, oneShotMs * 0.32) : 85;
+            setTimeout(() => {
+                if (this.isDead) return;
+                const tickDmg = Math.max(2, Math.round((this.user.attack || 10) * 0.24));
+                this._ranged(pos, angle, tickDmg, 0xff7a33, 1080, 1800, true, 'player', {
+                    ability: 'mage_burn',
+                    burnDurationMs: MAGE_BURN_DURATION_MS,
+                    burnTickMs: MAGE_BURN_TICK_MS,
+                });
+            }, castDelay);
+            broadcastAttack({ playerId: this.user.id, cls, attackType: 'ability', ability: 'mage_burn', x: Math.round(pos.x), z: Math.round(pos.z), angle });
+            this._showNotification('🔥 Огненный шар: горение 10с');
+            this._updateAbilityUI();
+            return;
         }
 
-        broadcastAttack({ playerId: this.user.id, cls, x: Math.round(pos.x), z: Math.round(pos.z), angle, swingDir });
+        if (cls === 'archer') {
+            const readyAt = this.abilityCooldowns.archerPowerReadyAt || 0;
+            if (now < readyAt) {
+                this._showNotification(`⏳ Пробивной выстрел через ${((readyAt - now) / 1000).toFixed(1)}с`);
+                return;
+            }
+            this.abilityCooldowns.archerPowerReadyAt = now + ARCHER_POWERSHOT_COOLDOWN_MS;
+            const oneShotMs = this._playOneShotAnim(this.playerModel, this.classActions.archer?.cast || CLASS_ACTIONS.archer.cast, { minLockMs: 160, lockMult: 0.42 });
+            const castDelay = oneShotMs > 0 ? Math.min(160, oneShotMs * 0.35) : 70;
+            setTimeout(() => {
+                if (this.isDead) return;
+                const dmg = Math.round(((this.user.attack || 10) + (CLASS_DMG.archer || 16)) * 1.45);
+                this._ranged(pos, angle, dmg, 0x9fc5ff, 980, 2500, true, 'player', {
+                    ability: 'archer_powershot',
+                    pierce: 1,
+                });
+            }, castDelay);
+            broadcastAttack({ playerId: this.user.id, cls, attackType: 'ability', ability: 'archer_powershot', x: Math.round(pos.x), z: Math.round(pos.z), angle });
+            this._showNotification('🏹 Пробивной выстрел!');
+            this._updateAbilityUI();
+            return;
+        }
+
+        const readyAt = this.abilityCooldowns.warriorWhirlReadyAt || 0;
+        if (now < readyAt) {
+            this._showNotification(`⏳ Вихрь через ${((readyAt - now) / 1000).toFixed(1)}с`);
+            return;
+        }
+        this.abilityCooldowns.warriorWhirlReadyAt = now + WARRIOR_WHIRL_COOLDOWN_MS;
+        this.warriorWhirlState = {
+            active: true,
+            until: now + WARRIOR_WHIRL_DURATION_MS,
+            nextTickAt: now + 180,
+        };
+        this._playOneShotAnim(this.playerModel, this.classActions.warrior?.melee || CLASS_ACTIONS.warrior.melee, { minLockMs: 200, lockMult: 0.35 });
+        broadcastAttack({ playerId: this.user.id, cls, attackType: 'ability', ability: 'warrior_whirl', x: Math.round(pos.x), z: Math.round(pos.z), angle });
+        this._showNotification('🌀 Вихрь активирован на 10с');
+        this._updateAbilityUI();
+    }
+
+    _updateWarriorWhirl(now) {
+        if (!this.warriorWhirlState?.active) return;
+        if (now >= this.warriorWhirlState.until) {
+            this.warriorWhirlState = null;
+            this._updateAbilityUI();
+            return;
+        }
+        if (now < (this.warriorWhirlState.nextTickAt || 0)) return;
+
+        this.warriorWhirlState.nextTickAt = now + WARRIOR_WHIRL_TICK_MS;
+        const pos = this.playerModel.position.clone();
+        const dmg = Math.max(4, Math.round(((this.user.attack || 10) + (CLASS_DMG.warrior || 20)) * 0.45));
+        const range = 30;
+
+        this.enemies.forEach((e) => {
+            if (!e.alive) return;
+            const d = Math.hypot(e.model.position.x - pos.x, e.model.position.z - pos.z);
+            if (d > (e.def.isBoss ? range + 10 : range)) return;
+            this._dmg(e, dmg, this.playerModel.rotation.y, 'right');
+        });
+
+        Object.entries(this.others).forEach(([rawId, model]) => {
+            const targetId = Number(rawId);
+            const state = this.remotePlayers[targetId];
+            if (!state || state.hp <= 0) return;
+            const d = Math.hypot(model.position.x - pos.x, model.position.z - pos.z);
+            if (d > range) return;
+            const dmgAfterArmor = Math.max(1, Math.round(dmg - ((state.defense || 5) * 0.5)));
+            this._emitPlayerHit(targetId, dmgAfterArmor, 'whirl', model.position);
+        });
+
+        this._spawnDashFlash(pos, 0xffd27b, 6.8);
     }
 
     _swingWeapon(direction) {
@@ -2628,6 +2944,7 @@ export class Game3D {
     }
 
     _startBlock() {
+        if (this.isDead) return;
         this.isBlocking = true;
         const parts = this.playerModel.userData.parts;
         if (!parts) return;
@@ -3152,16 +3469,18 @@ export class Game3D {
         }
     }
 
-    _ranged(pos, angle, dmg, color, speed, lifespan, isLocal, owner = 'player') {
+    _ranged(pos, angle, dmg, color, speed, lifespan, isLocal, owner = 'player', options = {}) {
         const proj = new THREE.Group();
-        const projectileType = color === 0xE040FB ? 'mage' : 'archer';
+        const projectileType = options.projectileType
+            || ((color === 0xE040FB || options.ability === 'mage_burn') ? 'mage' : 'archer');
+        const isFire = options.ability === 'mage_burn';
 
         if (projectileType === 'mage') {
             const core = new THREE.Mesh(
                 new THREE.IcosahedronGeometry(1.2, 1),
                 new THREE.MeshStandardMaterial({
-                    color: 0xffb5ff,
-                    emissive: 0x8f31d3,
+                    color: isFire ? 0xffd2a3 : 0xffb5ff,
+                    emissive: isFire ? 0xff6a00 : 0x8f31d3,
                     emissiveIntensity: 1.7,
                     roughness: 0.2,
                     metalness: 0.08,
@@ -3170,7 +3489,7 @@ export class Game3D {
             const aura = new THREE.Mesh(
                 new THREE.SphereGeometry(2.3, 12, 10),
                 new THREE.MeshBasicMaterial({
-                    color: 0xe040fb,
+                    color: isFire ? 0xff7a33 : 0xe040fb,
                     transparent: true,
                     opacity: 0.22,
                     blending: THREE.AdditiveBlending,
@@ -3179,7 +3498,7 @@ export class Game3D {
             );
             const ringA = new THREE.Mesh(
                 new THREE.TorusGeometry(2.1, 0.18, 8, 28),
-                new THREE.MeshBasicMaterial({ color: 0xf6d5ff, transparent: true, opacity: 0.5 })
+                new THREE.MeshBasicMaterial({ color: isFire ? 0xffe3bf : 0xf6d5ff, transparent: true, opacity: 0.5 })
             );
             ringA.rotation.x = Math.PI * 0.5;
             const ringB = ringA.clone();
@@ -3222,8 +3541,14 @@ export class Game3D {
         this.projectiles.push({
             mesh: proj, vx: Math.sin(angle) * speed, vz: Math.cos(angle) * speed,
             dmg, isLocal, born: performance.now(), life: lifespan, type: projectileType,
-            worldRadius: PROJECTILE_WORLD_RADIUS[projectileType] || 1.2,
+            worldRadius: options.worldRadius || PROJECTILE_WORLD_RADIUS[projectileType] || 1.2,
             owner,
+            ability: options.ability || null,
+            pierceLeft: Math.max(0, Number(options.pierce || 0)),
+            hitPlayers: new Set(),
+            hitMobs: new Set(),
+            burnDurationMs: options.burnDurationMs || MAGE_BURN_DURATION_MS,
+            burnTickMs: options.burnTickMs || MAGE_BURN_TICK_MS,
         });
     }
 
@@ -3270,6 +3595,10 @@ export class Game3D {
             if (prevHp > 0 && state.hp <= 0 && targetModel) {
                 this._spawnBloodPool(targetModel.position, { radius: 2.4, opacity: 0.5 });
             }
+            if (prevHp > 0 && state.hp <= 0) {
+                this._grantXp(PLAYER_KILL_XP, 'player');
+                this._showNotification(`⚔️ Убийство игрока! +${PLAYER_KILL_XP} XP`);
+            }
         }
 
         broadcastPlayerHit({
@@ -3282,6 +3611,76 @@ export class Game3D {
             at: Date.now(),
             hitId,
         });
+    }
+
+    _applyBurnToMob(enemy, tickDmg, durationMs = MAGE_BURN_DURATION_MS, tickMs = MAGE_BURN_TICK_MS) {
+        if (!enemy?.alive) return;
+        enemy._burnTickDmg = Math.max(enemy._burnTickDmg || 0, Math.max(1, Math.round(tickDmg || 1)));
+        enemy._burnTickMs = Math.max(250, Math.round(tickMs || MAGE_BURN_TICK_MS));
+        enemy._burnUntil = Math.max(enemy._burnUntil || 0, performance.now() + durationMs);
+        enemy._burnNextAt = Math.min(enemy._burnNextAt || Infinity, performance.now() + 120);
+        this._floatDmg(enemy.model.position, '🔥 BURN', '#ff9b4a');
+    }
+
+    _updateMobBurn(enemy, now) {
+        if (!enemy?.alive) return;
+        if (!enemy._burnUntil || now >= enemy._burnUntil) {
+            enemy._burnUntil = 0;
+            enemy._burnNextAt = 0;
+            return;
+        }
+        if (now < (enemy._burnNextAt || 0)) return;
+
+        enemy._burnNextAt = now + (enemy._burnTickMs || MAGE_BURN_TICK_MS);
+        const dmg = Math.max(1, Math.round(enemy._burnTickDmg || 1));
+        enemy.hp -= dmg;
+        enemy._lastHitAngle = this.playerModel.rotation.y;
+        enemy._lastSwingDir = 'thrust';
+        this._floatDmg(enemy.model.position, dmg, '#ff9b4a');
+        this._spawnBloodImpact(enemy.model.position.clone().add(new THREE.Vector3(0, 6.5, 0)), enemy.model.rotation.y, {
+            count: 4,
+            speed: 2.2,
+            upward: 1.5,
+            lifeMs: 540,
+            poolChance: 0.3,
+        });
+        broadcastMobHit({ mobId: enemy.def.id, dmg });
+        if (enemy.hp <= 0) this._killMob(enemy, true);
+    }
+
+    _applyBurnToRemotePlayer(targetId, worldPos, tickDmg, durationMs = MAGE_BURN_DURATION_MS, tickMs = MAGE_BURN_TICK_MS) {
+        if (!targetId || targetId === this.user.id) return;
+        const state = this.remotePlayers[targetId];
+        if (!state || state.hp <= 0) return;
+        const prev = this.remoteBurnEffects[targetId] || {};
+        this.remoteBurnEffects[targetId] = {
+            targetId,
+            tickDmg: Math.max(prev.tickDmg || 0, Math.max(1, Math.round(tickDmg || 1))),
+            tickMs: Math.max(250, Math.round(tickMs || MAGE_BURN_TICK_MS)),
+            until: Math.max(prev.until || 0, performance.now() + durationMs),
+            nextTickAt: Math.min(prev.nextTickAt || Infinity, performance.now() + 120),
+            x: worldPos?.x ?? prev.x ?? 0,
+            z: worldPos?.z ?? prev.z ?? 0,
+        };
+        if (worldPos) this._floatDmg(worldPos, '🔥 BURN', '#ff9b4a');
+    }
+
+    _updateRemoteBurnEffects(now) {
+        const entries = Object.entries(this.remoteBurnEffects);
+        for (const [rawId, effect] of entries) {
+            const targetId = Number(rawId);
+            const state = this.remotePlayers[targetId];
+            if (!state || state.hp <= 0 || !effect || now >= (effect.until || 0)) {
+                delete this.remoteBurnEffects[rawId];
+                continue;
+            }
+            if (now < (effect.nextTickAt || 0)) continue;
+            effect.nextTickAt = now + (effect.tickMs || MAGE_BURN_TICK_MS);
+            const model = this.others[targetId];
+            const hitPos = model ? model.position : { x: effect.x, z: effect.z };
+            this._emitPlayerHit(targetId, effect.tickDmg || 1, 'burn', hitPos);
+            if (model) this._floatDmg(model.position, effect.tickDmg || 1, '#ff9b4a');
+        }
     }
 
     _onPlayerHit(payload) {
@@ -3363,11 +3762,21 @@ export class Game3D {
     }
 
     _handleSelfDeath(attackerId) {
+        if (this.isDead) return;
+        const now = performance.now();
         this.isDead = true;
-        this.deadUntil = performance.now() + PVP_RESPAWN_MS;
+        this.isGhost = true;
+        this.deadUntil = now + PVP_RESPAWN_MS;
         this.user.hp = 0;
+        this.isBlocking = false;
         this.playerBleedingUntil = 0;
         this.playerNextBleedAt = 0;
+        this.warriorWhirlState = null;
+        this._setGhostVisual(true);
+        this._spawnSoulEmerge(this.playerModel.position);
+        this._ensureGhostUI();
+        this._updateGhostUI();
+        this._updateAbilityUI();
         this._spawnBloodImpact(this.playerModel.position.clone().add(new THREE.Vector3(0, 9, 0)), this.playerModel.rotation.y + Math.PI, {
             count: 18,
             speed: 6.3,
@@ -3377,27 +3786,190 @@ export class Game3D {
         });
         this._spawnBloodPool(this.playerModel.position, { radius: 3.6, opacity: 0.54, lifeMs: BLOOD_POOL_LIFETIME_MS + 12000 });
         if (window.updateHUD) window.updateHUD();
-        this._showNotification(`💀 Тебя убил игрок #${attackerId || '?'}. Возрождение...`);
+        const source = typeof attackerId === 'number'
+            ? `игрок #${attackerId}`
+            : (attackerId ? String(attackerId) : 'противник');
+        this._showNotification(`💀 Тебя убил ${source}. Душа покинула тело на 10с.`);
     }
 
     _respawnSelf() {
-        const spawn = ARENA_SPAWNS[Math.floor(Math.random() * ARENA_SPAWNS.length)] || { x: 1500, z: 1500 };
-        this.playerModel.position.x = spawn.x;
-        this.playerModel.position.z = spawn.z;
-        this.playerModel.position.y = this._getPlayerGroundTargetY(spawn.x, spawn.z);
-        this.user.x = Math.round(spawn.x);
-        this.user.y = Math.round(spawn.z);
+        const ghostX = this.playerModel.position.x;
+        const ghostZ = this.playerModel.position.z;
+        const resolved = this._resolveArenaCollision(ghostX, ghostZ, PLAYER_COLLIDER_RADIUS);
+        const spawnX = Math.max(12, Math.min(MAP - 12, resolved.x));
+        const spawnZ = Math.max(12, Math.min(MAP - 12, resolved.z));
+        this.playerModel.position.x = spawnX;
+        this.playerModel.position.z = spawnZ;
+        this.playerModel.position.y = this._getPlayerGroundTargetY(spawnX, spawnZ);
+        this.user.x = Math.round(spawnX);
+        this.user.y = Math.round(spawnZ);
         this.lookYaw = this.playerModel.rotation.y;
         this.user.hp = this.user.max_hp || 100;
         this.user.velocityY = 0;
         this.user.isJumping = false;
         this.isDead = false;
+        this.isGhost = false;
         this.deadUntil = 0;
         this.playerBleedingUntil = 0;
         this.playerNextBleedAt = 0;
         this.spawnProtectedUntil = performance.now() + PVP_RESPAWN_PROTECTION_MS;
+        this._setGhostVisual(false);
+        this._clearGhostUI();
         if (window.updateHUD) window.updateHUD();
-        this._showNotification('⚔️ Возрождение. 2.5с неуязвимости.');
+        this._showNotification('✨ Душа вернулась в тело. 2.5с неуязвимости.');
+    }
+
+    _setGhostVisual(active) {
+        if (!this.playerModel) return;
+        if (active === this._ghostVisualActive) return;
+        this._ghostVisualActive = active;
+        this.playerModel.traverse((node) => {
+            if (!node.isMesh || !node.material) return;
+            const apply = (material) => {
+                if (!material) return;
+                if (active) {
+                    if (!material.userData._ghostOriginal) {
+                        material.userData._ghostOriginal = {
+                            transparent: material.transparent,
+                            opacity: material.opacity,
+                            emissive: material.emissive?.getHex ? material.emissive.getHex() : null,
+                            emissiveIntensity: material.emissiveIntensity ?? null,
+                            depthWrite: material.depthWrite,
+                        };
+                    }
+                    material.transparent = true;
+                    material.opacity = Math.min(0.45, Number(material.opacity || 1));
+                    material.depthWrite = false;
+                    if (material.emissive?.setHex) {
+                        material.emissive.setHex(0x7fbaff);
+                        material.emissiveIntensity = 0.65;
+                    }
+                } else if (material.userData?._ghostOriginal) {
+                    const prev = material.userData._ghostOriginal;
+                    material.transparent = !!prev.transparent;
+                    material.opacity = Number.isFinite(prev.opacity) ? prev.opacity : 1;
+                    material.depthWrite = prev.depthWrite !== false;
+                    if (material.emissive?.setHex && prev.emissive !== null) {
+                        material.emissive.setHex(prev.emissive);
+                        material.emissiveIntensity = Number.isFinite(prev.emissiveIntensity) ? prev.emissiveIntensity : (material.emissiveIntensity || 0);
+                    }
+                    delete material.userData._ghostOriginal;
+                }
+            };
+            if (Array.isArray(node.material)) {
+                node.material.forEach(apply);
+            } else {
+                apply(node.material);
+            }
+        });
+    }
+
+    _ensureGhostUI() {
+        if (this.ghostUI?.root?.isConnected) return;
+        const root = document.createElement('div');
+        root.style.cssText = [
+            'position:fixed',
+            'inset:0',
+            'pointer-events:none',
+            'z-index:9996',
+            'backdrop-filter:blur(4px) saturate(.72)',
+            'background:radial-gradient(circle at 50% 55%, rgba(176,220,255,.09), rgba(80,120,170,.22) 58%, rgba(17,24,34,.44))',
+            'display:flex',
+            'align-items:flex-end',
+            'justify-content:center',
+            'padding-bottom:72px',
+            'font:700 15px Inter, sans-serif',
+            'letter-spacing:.3px',
+            'color:#d6ecff',
+            'text-shadow:0 0 8px rgba(150,210,255,.4),0 1px 2px rgba(0,0,0,.8)',
+        ].join(';');
+        const label = document.createElement('div');
+        label.textContent = 'ДУША ВНЕ ТЕЛА';
+        root.appendChild(label);
+        document.body.appendChild(root);
+        this.ghostUI = { root, label };
+    }
+
+    _updateGhostUI() {
+        if (!this.ghostUI?.label) return;
+        const leftMs = Math.max(0, this.deadUntil - performance.now());
+        this.ghostUI.label.textContent = `ДУША ВНЕ ТЕЛА: ${(leftMs / 1000).toFixed(1)}s`;
+    }
+
+    _clearGhostUI() {
+        if (!this.ghostUI) return;
+        this.ghostUI.root?.remove?.();
+        this.ghostUI = null;
+    }
+
+    _spawnSoulEmerge(pos) {
+        const soul = new THREE.Mesh(
+            new THREE.SphereGeometry(2.4, 12, 10),
+            new THREE.MeshBasicMaterial({
+                color: 0xc8ebff,
+                transparent: true,
+                opacity: 0.85,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            })
+        );
+        soul.position.set(pos.x, pos.y + 10, pos.z);
+        this.scene.add(soul);
+        const born = performance.now();
+        const life = 900;
+        const anim = () => {
+            const t = (performance.now() - born) / life;
+            if (t >= 1) {
+                this.scene.remove(soul);
+                soul.geometry.dispose();
+                soul.material.dispose();
+                return;
+            }
+            soul.position.y += 0.06 + t * 0.08;
+            soul.scale.setScalar(1 + t * 1.7);
+            soul.material.opacity = 0.9 * (1 - t);
+            requestAnimationFrame(anim);
+        };
+        anim();
+    }
+
+    _updateGhostMovement(dt) {
+        const now = performance.now();
+        this._updateGhostUI();
+        if (Math.abs(this.mouseTurnDelta) > 0.0001) {
+            this.lookYaw -= this.mouseTurnDelta * LOOK_SENSITIVITY;
+            this.mouseTurnDelta = 0;
+        }
+        const turnT = 1 - Math.exp(-LOOK_SMOOTH_SPEED * dt);
+        this.playerModel.rotation.y = this._lerpAngle(this.playerModel.rotation.y, this.lookYaw, turnT);
+
+        let forwardAxis = 0;
+        let strafeAxis = 0;
+        if (this.keys['KeyW'] || this.keys['ArrowUp']) forwardAxis += 1;
+        if (this.keys['KeyS'] || this.keys['ArrowDown']) forwardAxis -= 1;
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafeAxis += 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis -= 1;
+
+        if (forwardAxis !== 0 || strafeAxis !== 0) {
+            const rot = this.playerModel.rotation.y;
+            const forwardX = Math.sin(rot);
+            const forwardZ = Math.cos(rot);
+            const rightX = Math.sin(rot + Math.PI * 0.5);
+            const rightZ = Math.cos(rot + Math.PI * 0.5);
+            let moveX = (forwardX * forwardAxis) + (rightX * strafeAxis * STRAFE_SPEED_MULT);
+            let moveZ = (forwardZ * forwardAxis) + (rightZ * strafeAxis * STRAFE_SPEED_MULT);
+            const len = Math.hypot(moveX, moveZ) || 1;
+            moveX /= len;
+            moveZ /= len;
+            const spd = this.playerSpeed * GHOST_MOVE_SPEED_MULT * dt;
+            this._resolveAndApplyPlayerMove(moveX * spd, moveZ * spd);
+            this._setCharacterAnim(this.playerModel, 'run');
+        } else {
+            this._setCharacterAnim(this.playerModel, 'idle');
+        }
+
+        const baseY = this._getPlayerGroundTargetY(this.playerModel.position.x, this.playerModel.position.z);
+        this.playerModel.position.y = baseY + 1.15 + Math.sin(now * 0.008) * 0.5;
     }
 
     _dmg(enemy, amount, hitAngle, swingDir) {
@@ -3429,6 +4001,9 @@ export class Game3D {
         const pos = enemy.model.position.clone();
         enemy._bleedingUntil = 0;
         enemy._nextBleedAt = 0;
+        enemy._burnUntil = 0;
+        enemy._burnNextAt = 0;
+        enemy._burnTickDmg = 0;
 
         // Spawn ragdoll with physics!
         this._createRagdoll(enemy, enemy._lastHitAngle || 0, enemy._lastSwingDir || 'right');
@@ -3437,10 +4012,10 @@ export class Game3D {
         this.scene.remove(enemy.model);
 
         if (isLocal) {
-            this.user.xp = (this.user.xp || 0) + enemy.def.xp;
-            this._floatDmg(pos, enemy.def.xp, '#4FC3F7', 'XP');
-            if (window.updateHUD) window.updateHUD();
-            if (enemy.def.isBoss) this._showNotification(`🔥 Босс повержен! +${enemy.def.xp} XP`);
+            const xpGain = Math.max(2, Math.round((enemy.def.xp || 0) * MOB_KILL_XP_MULT));
+            this._grantXp(xpGain, 'mob');
+            this._floatDmg(pos, xpGain, '#4FC3F7', 'XP');
+            if (enemy.def.isBoss) this._showNotification(`🔥 Босс повержен! +${xpGain} XP`);
         }
 
         // Respawn
@@ -3448,6 +4023,9 @@ export class Game3D {
             enemy.hp = enemy.maxHp;
             enemy.alive = true;
             enemy._dismembered = {};
+            enemy._burnUntil = 0;
+            enemy._burnNextAt = 0;
+            enemy._burnTickDmg = 0;
             enemy.model.scale.set(1, 1, 1);
             const parts = enemy.model.userData.parts || {};
             Object.values(parts).forEach((part) => {
@@ -3626,8 +4204,30 @@ export class Game3D {
         initRealtime(
             (payload) => {
                 if (payload.playerId === this.user.id) return;
-                if (payload.cls === 'warrior') this._melee({ x: payload.x, z: payload.z }, payload.angle, 0, false);
-                else this._ranged({ x: payload.x, z: payload.z }, payload.angle, 0, payload.cls === 'archer' ? 0x8D6E63 : 0xE040FB, 400, 2000, false);
+                if (payload.attackType === 'ability') {
+                    if (payload.ability === 'warrior_whirl') {
+                        this._melee({ x: payload.x, z: payload.z }, payload.angle, 0, false);
+                        return;
+                    }
+                    if (payload.ability === 'archer_powershot') {
+                        this._ranged({ x: payload.x, z: payload.z }, payload.angle, 0, 0x9fc5ff, 980, 1800, false);
+                        return;
+                    }
+                    if (payload.ability === 'mage_burn') {
+                        this._ranged({ x: payload.x, z: payload.z }, payload.angle, 0, 0xff7a33, 1080, 1500, false, 'player', {
+                            ability: 'mage_burn',
+                        });
+                        return;
+                    }
+                }
+
+                if (payload.cls === 'warrior') {
+                    this._melee({ x: payload.x, z: payload.z }, payload.angle, 0, false);
+                } else if (payload.cls === 'archer') {
+                    this._ranged({ x: payload.x, z: payload.z }, payload.angle, 0, 0x8D6E63, 460, 2000, false);
+                } else {
+                    this._ranged({ x: payload.x, z: payload.z }, payload.angle, 0, 0xE040FB, 700, 2000, false);
+                }
             },
             (payload) => {
                 const e = this.enemies.find(e => e.def.id === payload.mobId);
@@ -3656,7 +4256,7 @@ export class Game3D {
     }
 
     _broadcastMovement(now) {
-        if (!this.playerModel || this.isDead) return;
+        if (!this.playerModel) return;
         if (now - this.lastMoveBroadcast < MOVE_BROADCAST_INTERVAL_MS) return;
         this.lastMoveBroadcast = now;
         this.localMoveSeq += 1;
@@ -4028,11 +4628,13 @@ export class Game3D {
         this._updateEnemyAI(dt);
         this._updateRemotePlayers(dt);
         this._updateProj(dt);
+        this._updateRemoteBurnEffects(time);
         this._updateAmbient(time, dt);
         this._updateCombatCamera(dt);
         this._updateScreenEffects();
         this._updatePhysics(dt);
         this._updateBillboardBars();
+        this._updateAbilityUI();
 
         // Third-Person Over-the-Shoulder Camera logic
         if (this.playerModel) {
@@ -4063,16 +4665,18 @@ export class Game3D {
     }
 
     _updatePlayer(dt) {
+        const now = performance.now();
         if (this.isDead) {
-            this.playerModel.position.y = this._getPlayerGroundTargetY(this.playerModel.position.x, this.playerModel.position.z);
-            if (performance.now() >= this.deadUntil) this._respawnSelf();
+            this._updateGhostMovement(dt);
+            this._setHPBarValue(this.hpBar, 0.01);
+            this._updateStaminaUI(false);
+            if (now >= this.deadUntil) this._respawnSelf();
             return;
         }
 
         let isMoving = false;
         let forwardAxis = 0;
         let strafeAxis = 0;
-        const now = performance.now();
 
         if (this.keys['KeyW'] || this.keys['ArrowUp']) forwardAxis += 1;
         if (this.keys['KeyS'] || this.keys['ArrowDown']) forwardAxis -= 1;
@@ -4094,7 +4698,7 @@ export class Game3D {
         }
 
         let isSprinting = false;
-        const sprintRequested = hasMoveInput && this.keys['ShiftLeft'] && forwardAxis > 0 && !this.dashState?.active && !dashStarted;
+        const sprintRequested = hasMoveInput && this.keys['ShiftLeft'] && forwardAxis > 0 && !this.dashState?.active && !dashStarted && !this.warriorWhirlState?.active;
         if (sprintRequested && this.stamina > 0.2) {
             isSprinting = true;
             this.lastSprintAt = now;
@@ -4114,6 +4718,10 @@ export class Game3D {
         }
         const turnT = 1 - Math.exp(-LOOK_SMOOTH_SPEED * dt);
         this.playerModel.rotation.y = this._lerpAngle(this.playerModel.rotation.y, this.lookYaw, turnT);
+        if (this.warriorWhirlState?.active) {
+            this.playerModel.rotation.y += dt * 11.5;
+            this.lookYaw = this.playerModel.rotation.y;
+        }
 
         let moveX = 0;
         let moveZ = 0;
@@ -4135,11 +4743,14 @@ export class Game3D {
             moveZ /= len;
 
             isMoving = true;
-            const spd = this.playerSpeed * dt * (isSprinting ? SPRINT_SPEED_MULT : 1.0);
+            const whirlSpeed = this.warriorWhirlState?.active ? 1.32 : 1.0;
+            const spd = this.playerSpeed * dt * (isSprinting ? SPRINT_SPEED_MULT : 1.0) * whirlSpeed;
             this._resolveAndApplyPlayerMove(moveX * spd, moveZ * spd);
         } else {
             this._resolveAndApplyPlayerMove(0, 0);
         }
+
+        this._updateWarriorWhirl(now);
 
         const groundHeight = this._getPlayerGroundTargetY(this.playerModel.position.x, this.playerModel.position.z);
 
@@ -4202,6 +4813,22 @@ export class Game3D {
         const pct = (this.user.hp || 100) / (this.user.max_hp || 100);
         this._setHPBarValue(this.hpBar, pct);
         this._updateStaminaUI(isSprinting);
+        this._updateArenaPassiveXp(now);
+        this._updateAbilityUI();
+    }
+
+    _updateArenaPassiveXp(now) {
+        if (this.isDead) return;
+        const px = this.playerModel.position.x;
+        const pz = this.playerModel.position.z;
+        const inArena = Math.hypot(px - ARENA_CENTER.x, pz - ARENA_CENTER.z) <= 430;
+        if (!inArena) {
+            this.nextArenaXpAt = now + ARENA_PASSIVE_XP_INTERVAL_MS;
+            return;
+        }
+        if (now < (this.nextArenaXpAt || 0)) return;
+        this.nextArenaXpAt = now + ARENA_PASSIVE_XP_INTERVAL_MS;
+        this._grantXp(ARENA_PASSIVE_XP, 'arena', { silent: true });
     }
 
     _updateEnemyAI(dt) {
@@ -4227,6 +4854,7 @@ export class Game3D {
                     poolSizeMax: 0.33,
                 });
             }
+            this._updateMobBurn(e, now);
 
             // Update animation phase
             e.animPhase += dt * 5;
@@ -4257,7 +4885,7 @@ export class Game3D {
                         this._animateMobIdle(e, parts, type, t, dt, false);
                     }
 
-                    if (dist > 80 && dist < e.def.range && now - e.lastAtk > 1500) {
+                    if (!this.isDead && dist > 80 && dist < e.def.range && now - e.lastAtk > 1500) {
                         e.lastAtk = now;
                         e.attackAnim = 1.0;
                         const armWeak = (e._armDebuff && now < e._armDebuff) ? 0.6 : 1.0;
@@ -4275,7 +4903,7 @@ export class Game3D {
                         this._animateMobChase(e, parts, type, t, dt, dist);
                     }
 
-                    if (dist < (e.def.isBoss ? 40 : 20) && now - e.lastAtk > 1200) {
+                    if (!this.isDead && dist < (e.def.isBoss ? 40 : 20) && now - e.lastAtk > 1200) {
                         e.lastAtk = now;
                         e.attackAnim = 1.0; // Start attack animation
                         const armWeak = (e._armDebuff && now < e._armDebuff) ? 0.6 : 1.0;
@@ -4305,12 +4933,7 @@ export class Game3D {
                         if (this.user.hp <= 0) {
                             this._triggerSlowMo(0.5, 0.1);
                             this._triggerScreenFlash('#FF0000', 500);
-                            this.user.hp = this.user.max_hp || 100;
-                            this._spawnBloodPool(this.playerModel.position, { radius: 3.1, opacity: 0.52, lifeMs: BLOOD_POOL_LIFETIME_MS + 9000 });
-                            this.playerModel.position.set(1500, this._getPlayerGroundTargetY(1500, 1500), 1500);
-                            this.playerBleedingUntil = 0;
-                            this.playerNextBleedAt = 0;
-                            this._showNotification('💀 Ты погиб!');
+                            this._handleSelfDeath('монстр');
                         }
                     }
                 }
@@ -4835,7 +5458,7 @@ export class Game3D {
             // Hit check
             if (p.owner === 'enemy') {
                 const hitDist = 13;
-                if (Math.hypot(this.playerModel.position.x - p.mesh.position.x, this.playerModel.position.z - p.mesh.position.z) < hitDist) {
+                if (!this.isDead && Math.hypot(this.playerModel.position.x - p.mesh.position.x, this.playerModel.position.z - p.mesh.position.z) < hitDist) {
                     let dmg = Math.max(1, Math.round((p.dmg || 1) - ((this.user.defense || 5) * 0.22)));
                     if (this.isBlocking) {
                         dmg = Math.max(1, Math.round(dmg * 0.45));
@@ -4858,12 +5481,7 @@ export class Game3D {
                     if (window.updateHUD) window.updateHUD();
                     if (this.user.hp <= 0) {
                         this._triggerScreenFlash('#FF0000', 450);
-                        this.user.hp = this.user.max_hp || 100;
-                        this._spawnBloodPool(this.playerModel.position, { radius: 3.0, opacity: 0.52, lifeMs: BLOOD_POOL_LIFETIME_MS + 8000 });
-                        this.playerModel.position.set(1500, this._getPlayerGroundTargetY(1500, 1500), 1500);
-                        this.playerBleedingUntil = 0;
-                        this.playerNextBleedAt = 0;
-                        this._showNotification('💀 Ты погиб!');
+                        this._handleSelfDeath('магический снаряд');
                     }
                     this._spawnProjectileWorldImpact(p);
                     this.scene.remove(p.mesh);
@@ -4877,25 +5495,49 @@ export class Game3D {
                     const targetId = Number(rawId);
                     const state = this.remotePlayers[targetId];
                     if (!state || state.hp <= 0) continue;
+                    if (p.hitPlayers?.has(targetId)) continue;
                     if (Math.hypot(model.position.x - p.mesh.position.x, model.position.z - p.mesh.position.z) < PVP_RANGED_RANGE) {
-                        const dmgAfterArmor = Math.max(1, Math.round((p.dmg || 1) - ((state.defense || 5) * 0.35)));
-                        this._emitPlayerHit(targetId, dmgAfterArmor, 'ranged', model.position);
-                        this.scene.remove(p.mesh);
-                        this.projectiles.splice(i, 1);
-                        consumed = true;
-                        break;
+                        p.hitPlayers?.add(targetId);
+                        if (p.ability === 'mage_burn') {
+                            this._applyBurnToRemotePlayer(targetId, model.position, p.dmg, p.burnDurationMs, p.burnTickMs);
+                        } else {
+                            const dmgAfterArmor = Math.max(1, Math.round((p.dmg || 1) - ((state.defense || 5) * 0.35)));
+                            this._emitPlayerHit(targetId, dmgAfterArmor, p.ability || 'ranged', model.position);
+                        }
+
+                        if ((p.pierceLeft || 0) > 0) {
+                            p.pierceLeft -= 1;
+                        } else {
+                            this._spawnProjectileWorldImpact(p);
+                            this.scene.remove(p.mesh);
+                            this.projectiles.splice(i, 1);
+                            consumed = true;
+                            break;
+                        }
                     }
                 }
                 if (consumed) continue;
 
                 for (const e of this.enemies) {
                     if (!e.alive) continue;
+                    if (p.hitMobs?.has(e.def.id)) continue;
                     if (Math.hypot(e.model.position.x - p.mesh.position.x, e.model.position.z - p.mesh.position.z) < (e.def.isBoss ? 30 : 15)) {
-                        this._dmg(e, p.dmg, Math.atan2(p.vx, p.vz), 'thrust');
-                        this.scene.remove(p.mesh);
-                        this.projectiles.splice(i, 1);
-                        consumed = true;
-                        break;
+                        p.hitMobs?.add(e.def.id);
+                        if (p.ability === 'mage_burn') {
+                            this._applyBurnToMob(e, p.dmg, p.burnDurationMs, p.burnTickMs);
+                        } else {
+                            this._dmg(e, p.dmg, Math.atan2(p.vx, p.vz), 'thrust');
+                        }
+
+                        if ((p.pierceLeft || 0) > 0) {
+                            p.pierceLeft -= 1;
+                        } else {
+                            this._spawnProjectileWorldImpact(p);
+                            this.scene.remove(p.mesh);
+                            this.projectiles.splice(i, 1);
+                            consumed = true;
+                            break;
+                        }
                     }
                 }
                 if (consumed) continue;
@@ -4982,6 +5624,13 @@ export class Game3D {
     }
 
     _updateScreenEffects() {
+        if (this.isDead) {
+            if (this._vignetteDiv) {
+                this._vignetteDiv.remove();
+                this._vignetteDiv = null;
+            }
+            return;
+        }
         // Low HP vignette
         const hpPct = (this.user.hp || 100) / (this.user.max_hp || 100);
         if (hpPct < 0.3) {
