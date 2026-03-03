@@ -50,6 +50,9 @@ const DASH_COOLDOWN_MS = 750;
 const DASH_STAMINA_COST = { warrior: 26, archer: 24, mage: 30 };
 const DASH_DISTANCE = { warrior: 92, archer: 108, mage: 112 };
 const DASH_DURATION_MS = { warrior: 270, archer: 320 };
+const BLOOD_COLOR = 0x6f0b10;
+const BLOOD_PARTICLE_GRAVITY = 26;
+const BLOOD_POOL_LIFETIME_MS = 38000;
 const PREMIUM_MANIFEST_URL = 'assets/premium/manifest.json';
 const CLASS_ACTIONS = {
     warrior: {
@@ -186,6 +189,11 @@ export class Game3D {
         this.dashRequested = false;
         this.lastDashAt = 0;
         this.dashState = null;
+        this.crosshairUI = null;
+        this.bloodParticles = [];
+        this.bloodPools = [];
+        this.playerBleedingUntil = 0;
+        this.playerNextBleedAt = 0;
 
         this._init();
         this._initPhysics();
@@ -410,80 +418,191 @@ export class Game3D {
         this.ragdollMaterial = new CANNON.Material({ friction: 0.4, restitution: 0.5 });
     }
 
+    _materialBaseColor(material, fallback = 0x888888) {
+        if (Array.isArray(material)) return this._materialBaseColor(material[0], fallback);
+        if (!material) return fallback;
+        if (material.color?.getHex) return material.color.getHex();
+        if (material.emissive?.getHex) return material.emissive.getHex();
+        return fallback;
+    }
+
+    _collectRagdollSourceParts(enemy) {
+        const out = [];
+        const pushFromMesh = (mesh, name, mass = 1.5) => {
+            if (!mesh?.isMesh || mesh.visible === false) return;
+            const box = new THREE.Box3().setFromObject(mesh);
+            if (box.isEmpty()) return;
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            if (!Number.isFinite(size.x + size.y + size.z)) return;
+            if ((size.x + size.y + size.z) < 0.08) return;
+            const q = new THREE.Quaternion();
+            mesh.getWorldQuaternion(q);
+            out.push({
+                name,
+                center,
+                size,
+                quat: q,
+                color: this._materialBaseColor(mesh.material, MOB_COLORS[enemy.def.type] || 0x888888),
+                mass,
+            });
+        };
+
+        const parts = enemy.model?.userData?.parts || {};
+        pushFromMesh(parts.head, 'head', 1.3);
+        pushFromMesh(parts.torso, 'torso', 3.8);
+        pushFromMesh(parts.armRight, 'arm_right', 1.0);
+        pushFromMesh(parts.armLeft, 'arm_left', 1.0);
+        pushFromMesh(parts.legRight, 'leg_right', 1.3);
+        pushFromMesh(parts.legLeft, 'leg_left', 1.3);
+        pushFromMesh(parts.snout, 'snout', 0.8);
+        pushFromMesh(parts.tail, 'tail', 0.9);
+
+        if (Array.isArray(parts.tentacles)) {
+            parts.tentacles.slice(0, 6).forEach((tent, idx) => pushFromMesh(tent, `tentacle_${idx}`, 0.8));
+        }
+        if (Array.isArray(parts.wings)) {
+            parts.wings.slice(0, 2).forEach((wing, idx) => pushFromMesh(wing, `wing_${idx}`, 1.0));
+        }
+
+        if (out.length >= 4) return out;
+
+        const meshCandidates = [];
+        enemy.model?.traverse((node) => {
+            if (!node?.isMesh || node.visible === false) return;
+            const box = new THREE.Box3().setFromObject(node);
+            if (box.isEmpty()) return;
+            const size = box.getSize(new THREE.Vector3());
+            const volume = size.x * size.y * size.z;
+            if (!Number.isFinite(volume) || volume < 0.005) return;
+            meshCandidates.push({ node, volume });
+        });
+        meshCandidates
+            .sort((a, b) => b.volume - a.volume)
+            .slice(0, 7)
+            .forEach(({ node }, idx) => pushFromMesh(node, idx === 0 ? 'torso' : `chunk_${idx}`, idx === 0 ? 3.2 : 1.2));
+
+        return out;
+    }
+
     _createRagdoll(enemy, hitAngle, swingDir) {
         const pos = enemy.model.position.clone();
-        const parts = [];
-        const partDefs = [
-            { name: 'torso', geo: new THREE.CylinderGeometry(3, 2.5, 8, 6), color: enemy.model.children[0]?.material?.color?.getHex() || 0x888888, mass: 5, size: [3, 4, 3], y: 8 },
-            { name: 'head', geo: new THREE.SphereGeometry(2.5, 6, 6), color: 0xFFD5B0, mass: 2, size: [2.5], y: 16 },
-            { name: 'arm_l', geo: new THREE.CylinderGeometry(1, 0.8, 6, 4), color: 0xFFD5B0, mass: 1, size: [1, 3, 1], y: 10 },
-            { name: 'arm_r', geo: new THREE.CylinderGeometry(1, 0.8, 6, 4), color: 0xFFD5B0, mass: 1, size: [1, 3, 1], y: 10 },
-            { name: 'leg_l', geo: new THREE.CylinderGeometry(1.1, 0.9, 7, 4), color: 0x3E2723, mass: 1.5, size: [1.1, 3.5, 1.1], y: 3 },
-            { name: 'leg_r', geo: new THREE.CylinderGeometry(1.1, 0.9, 7, 4), color: 0x3E2723, mass: 1.5, size: [1.1, 3.5, 1.1], y: 3 },
-        ];
-
-        // Scale for bosses
-        const scale = enemy.def.isBoss ? 2 : 1;
-
-        // Hit impulse direction based on swing
-        const impulseForce = enemy.def.isBoss ? 80 : 40;
-        const upForce = swingDir === 'overhead' ? impulseForce * 1.5 : impulseForce * 0.5;
-
-        partDefs.forEach((def, i) => {
-            const mat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.7 });
-            const mesh = new THREE.Mesh(def.geo, mat);
-            mesh.scale.setScalar(scale);
-            mesh.position.set(
-                pos.x + (Math.random() - 0.5) * 3,
-                def.y * scale,
-                pos.z + (Math.random() - 0.5) * 3
+        const pieces = [];
+        const sourceParts = this._collectRagdollSourceParts(enemy);
+        if (!sourceParts.length) {
+            sourceParts.push(
+                {
+                    name: 'torso',
+                    center: pos.clone().add(new THREE.Vector3(0, 9, 0)),
+                    size: new THREE.Vector3(4.5, 7.5, 3.5),
+                    quat: new THREE.Quaternion(),
+                    color: MOB_COLORS[enemy.def.type] || 0x888888,
+                    mass: 3.4,
+                },
+                {
+                    name: 'head',
+                    center: pos.clone().add(new THREE.Vector3(0, 14, 0)),
+                    size: new THREE.Vector3(2.8, 2.8, 2.8),
+                    quat: new THREE.Quaternion(),
+                    color: 0xb7a7a0,
+                    mass: 1.2,
+                }
             );
+        }
+        const impulseBase = enemy.def.isBoss ? 90 : 42;
+        const upBase = swingDir === 'overhead' ? impulseBase * 1.0 : impulseBase * 0.45;
+
+        sourceParts.forEach((part) => {
+            const longest = Math.max(part.size.x, part.size.y, part.size.z);
+            const shortest = Math.max(0.12, Math.min(part.size.x, part.size.y, part.size.z));
+
+            let geo = null;
+            let shape = null;
+            const name = part.name || 'chunk';
+
+            if (name.includes('head') || name.includes('snout')) {
+                const radius = THREE.MathUtils.clamp(longest * 0.28, 0.45, enemy.def.isBoss ? 5.0 : 2.7);
+                geo = new THREE.SphereGeometry(radius, 8, 7);
+                shape = new CANNON.Sphere(radius * 0.92);
+            } else if (
+                name.includes('arm')
+                || name.includes('leg')
+                || name.includes('tail')
+                || name.includes('tentacle')
+                || name.includes('wing')
+            ) {
+                const radius = THREE.MathUtils.clamp(shortest * 0.22, 0.3, enemy.def.isBoss ? 2.2 : 1.3);
+                const length = THREE.MathUtils.clamp(longest * 0.92, 1.2, enemy.def.isBoss ? 14 : 8.5);
+                geo = new THREE.CapsuleGeometry(radius, Math.max(0.2, length - radius * 2), 4, 6);
+                shape = new CANNON.Box(new CANNON.Vec3(radius * 0.9, length * 0.42, radius * 0.9));
+            } else {
+                const sx = THREE.MathUtils.clamp(part.size.x * 0.86, 0.45, enemy.def.isBoss ? 10 : 5.5);
+                const sy = THREE.MathUtils.clamp(part.size.y * 0.86, 0.45, enemy.def.isBoss ? 10 : 5.5);
+                const sz = THREE.MathUtils.clamp(part.size.z * 0.86, 0.45, enemy.def.isBoss ? 10 : 5.5);
+                geo = new THREE.BoxGeometry(sx, sy, sz);
+                shape = new CANNON.Box(new CANNON.Vec3(sx * 0.45, sy * 0.45, sz * 0.45));
+            }
+
+            const mesh = new THREE.Mesh(
+                geo,
+                new THREE.MeshStandardMaterial({
+                    color: part.color,
+                    roughness: 0.68,
+                    metalness: 0.04,
+                    emissive: new THREE.Color(part.color).multiplyScalar(0.03),
+                    emissiveIntensity: 0.45,
+                })
+            );
+            mesh.position.copy(part.center);
+            mesh.quaternion.copy(part.quat);
+            mesh.rotation.x += (Math.random() - 0.5) * 0.35;
+            mesh.rotation.z += (Math.random() - 0.5) * 0.35;
             mesh.castShadow = true;
             this.scene.add(mesh);
 
-            // Cannon body
-            let shape;
-            if (def.name === 'head') {
-                shape = new CANNON.Sphere(def.size[0] * scale);
-            } else {
-                shape = new CANNON.Box(new CANNON.Vec3(
-                    (def.size[0] || 1) * scale,
-                    (def.size[1] || 1) * scale,
-                    (def.size[2] || 1) * scale
-                ));
-            }
-
             const body = new CANNON.Body({
-                mass: def.mass,
+                mass: Math.max(0.7, part.mass || 1.4),
                 shape,
                 material: this.ragdollMaterial,
                 position: new CANNON.Vec3(mesh.position.x, mesh.position.y, mesh.position.z),
-                linearDamping: 0.3,
-                angularDamping: 0.3
+                linearDamping: 0.28,
+                angularDamping: 0.34,
             });
+            body.quaternion.set(mesh.quaternion.x, mesh.quaternion.y, mesh.quaternion.z, mesh.quaternion.w);
 
-            // Apply impulse from hit direction
-            const spreadX = (Math.random() - 0.5) * 20;
-            const spreadZ = (Math.random() - 0.5) * 20;
-            body.applyImpulse(
-                new CANNON.Vec3(
-                    Math.sin(hitAngle) * impulseForce + spreadX,
-                    upForce + Math.random() * 20,
-                    Math.cos(hitAngle) * impulseForce + spreadZ
-                )
-            );
-            // Random spin
+            const forceScale = THREE.MathUtils.clamp((longest + shortest) * 0.45, 0.7, 2.4);
+            const spread = 8 + forceScale * 4.2;
+            const impulse = impulseBase * (0.55 + forceScale * 0.28);
+            body.applyImpulse(new CANNON.Vec3(
+                Math.sin(hitAngle) * impulse + (Math.random() - 0.5) * spread,
+                upBase + Math.random() * 16,
+                Math.cos(hitAngle) * impulse + (Math.random() - 0.5) * spread
+            ));
             body.angularVelocity.set(
-                (Math.random() - 0.5) * 15,
-                (Math.random() - 0.5) * 15,
-                (Math.random() - 0.5) * 15
+                (Math.random() - 0.5) * 13,
+                (Math.random() - 0.5) * 14,
+                (Math.random() - 0.5) * 13
             );
 
             this.physicsWorld.addBody(body);
-            parts.push({ mesh, body, born: performance.now() });
+            pieces.push({ mesh, body, born: performance.now() });
         });
 
-        this.ragdollParts.push(...parts);
+        this.ragdollParts.push(...pieces);
+        this._spawnBloodImpact(pos.clone().add(new THREE.Vector3(0, 8, 0)), hitAngle, {
+            count: enemy.def.isBoss ? 30 : 18,
+            speed: enemy.def.isBoss ? 7.4 : 5.9,
+            upward: enemy.def.isBoss ? 6.2 : 4.2,
+            lifeMs: 1250,
+            poolChance: 0.55,
+            poolSizeMin: 0.22,
+            poolSizeMax: 0.92,
+        });
+        this._spawnBloodPool(pos, {
+            radius: enemy.def.isBoss ? 8.5 : 4.0,
+            opacity: 0.52,
+            lifeMs: BLOOD_POOL_LIFETIME_MS + (enemy.def.isBoss ? 18000 : 4000),
+        });
     }
 
     _updatePhysics(dt) {
@@ -514,6 +633,8 @@ export class Game3D {
                 this.ragdollParts.splice(i, 1);
             }
         }
+
+        this._updateBloodFx(dt);
     }
 
     _getTerrainHeight(x, z) {
@@ -533,8 +654,13 @@ export class Game3D {
     _getArenaFloorHeight(x, z) {
         if (!ARENA_MODE) return -Infinity;
         const d = Math.hypot(x - ARENA_CENTER.x, z - ARENA_CENTER.z);
-        if (d <= 420) return 0.82;
-        if (d <= 560) return 0.42;
+        if (d <= 74) return 0.98; // Crest core
+        if (d <= 420) return 0.82; // Main fighting floor
+        if (d >= 423 && d <= 437) return 1.64; // Border torus ring
+        if (d >= 438 && d <= 468) return 1.42; // Step 1 top
+        if (d >= 472 && d <= 502) return 5.22; // Step 2 top
+        if (d >= 506 && d <= 536) return 9.02; // Step 3 top
+        if (d <= 560) return 0.42; // Stone base
         return -Infinity;
     }
 
@@ -1861,6 +1987,7 @@ export class Game3D {
         this.hpBar = this._createHPBar(36);
         this.playerModel.add(this.hpBar);
         this.hpBar.position.y = 22;
+        this._ensureCrosshairUI();
         this._ensureStaminaUI();
         this._updateStaminaUI(false);
 
@@ -1964,6 +2091,27 @@ export class Game3D {
         });
     }
 
+    _ensureCrosshairUI() {
+        if (this.crosshairUI?.isConnected) return;
+        const dot = document.createElement('div');
+        dot.style.cssText = [
+            'position:fixed',
+            'left:50%',
+            'top:50%',
+            'width:4px',
+            'height:4px',
+            'margin-left:-2px',
+            'margin-top:-2px',
+            'border-radius:999px',
+            'background:rgba(255,255,255,.92)',
+            'box-shadow:0 0 0 1px rgba(0,0,0,.65),0 0 5px rgba(255,255,255,.45)',
+            'pointer-events:none',
+            'z-index:9998',
+        ].join(';');
+        document.body.appendChild(dot);
+        this.crosshairUI = dot;
+    }
+
     _ensureStaminaUI() {
         if (this.staminaUI?.root?.isConnected) return;
         const root = document.createElement('div');
@@ -1971,24 +2119,44 @@ export class Game3D {
             'position:fixed',
             'left:22px',
             'bottom:20px',
-            'width:190px',
+            'width:220px',
             'z-index:9999',
             'pointer-events:none',
             'font:600 12px Inter, sans-serif',
             'color:#e7ecf6',
             'text-shadow:0 1px 2px rgba(0,0,0,.75)',
         ].join(';');
+        const titleRow = document.createElement('div');
+        titleRow.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:4px;';
         const title = document.createElement('div');
         title.textContent = 'STAMINA';
-        title.style.cssText = 'margin-bottom:4px;letter-spacing:.8px;opacity:.9;';
+        title.style.cssText = 'letter-spacing:.8px;opacity:.9;';
+        const dashState = document.createElement('div');
+        dashState.textContent = 'READY';
+        dashState.style.cssText = 'font-size:10px;letter-spacing:.5px;color:#8ff2ab;opacity:.95;';
+        titleRow.append(title, dashState);
+
         const barBg = document.createElement('div');
         barBg.style.cssText = 'height:10px;border-radius:999px;background:rgba(15,22,30,.86);border:1px solid rgba(255,255,255,.14);overflow:hidden;';
         const barFill = document.createElement('div');
         barFill.style.cssText = 'height:100%;width:100%;background:linear-gradient(90deg,#52d97f,#e5c44a);transition:width .09s linear, background-color .12s linear;';
         barBg.appendChild(barFill);
-        root.append(title, barBg);
+
+        const dashWrap = document.createElement('div');
+        dashWrap.style.cssText = 'margin-top:7px;';
+        const dashHint = document.createElement('div');
+        dashHint.textContent = 'DASH: Shift + Space';
+        dashHint.style.cssText = 'font-size:10px;opacity:.72;margin-bottom:3px;letter-spacing:.45px;';
+        const dashBg = document.createElement('div');
+        dashBg.style.cssText = 'height:6px;border-radius:999px;background:rgba(15,22,30,.72);border:1px solid rgba(255,255,255,.11);overflow:hidden;';
+        const dashFill = document.createElement('div');
+        dashFill.style.cssText = 'height:100%;width:100%;background:linear-gradient(90deg,#7cf29d,#4de273);transition:width .08s linear, background .12s linear;';
+        dashBg.appendChild(dashFill);
+        dashWrap.append(dashHint, dashBg);
+
+        root.append(titleRow, barBg, dashWrap);
         document.body.appendChild(root);
-        this.staminaUI = { root, barFill };
+        this.staminaUI = { root, barFill, dashFill, dashState };
     }
 
     _updateStaminaUI(isSprinting) {
@@ -1998,6 +2166,41 @@ export class Game3D {
         this.staminaUI.barFill.style.background = isSprinting
             ? 'linear-gradient(90deg,#ff9c63,#ff5454)'
             : 'linear-gradient(90deg,#52d97f,#e5c44a)';
+
+        if (!this.staminaUI.dashFill || !this.staminaUI.dashState) return;
+        const now = performance.now();
+        const cls = this.user.class || 'warrior';
+        const staminaCost = DASH_STAMINA_COST[cls] || 24;
+        const cooldownLeftMs = Math.max(0, DASH_COOLDOWN_MS - (now - this.lastDashAt));
+        const hasStamina = this.stamina >= staminaCost;
+        const isDashing = !!this.dashState?.active;
+
+        let label = 'READY';
+        let fill = 1;
+        let fillBg = 'linear-gradient(90deg,#7cf29d,#4de273)';
+        let labelColor = '#8ff2ab';
+
+        if (isDashing) {
+            label = 'DASHING';
+            fill = 0.18;
+            fillBg = 'linear-gradient(90deg,#9ad8ff,#57b7ff)';
+            labelColor = '#9dd8ff';
+        } else if (cooldownLeftMs > 0) {
+            label = `COOLDOWN ${(cooldownLeftMs / 1000).toFixed(1)}s`;
+            fill = 1 - (cooldownLeftMs / DASH_COOLDOWN_MS);
+            fillBg = 'linear-gradient(90deg,#8bc5ff,#4f86ff)';
+            labelColor = '#93c7ff';
+        } else if (!hasStamina) {
+            label = `LOW STAMINA ${staminaCost}+`;
+            fill = THREE.MathUtils.clamp((this.stamina || 0) / staminaCost, 0, 1);
+            fillBg = 'linear-gradient(90deg,#ff8b7c,#ff5b4e)';
+            labelColor = '#ffac9f';
+        }
+
+        this.staminaUI.dashFill.style.width = `${Math.round(fill * 100)}%`;
+        this.staminaUI.dashFill.style.background = fillBg;
+        this.staminaUI.dashState.textContent = label;
+        this.staminaUI.dashState.style.color = labelColor;
     }
 
     _resolveAndApplyPlayerMove(dx, dz) {
@@ -2252,7 +2455,7 @@ export class Game3D {
             if (e.code === 'KeyE') this._interact();
         });
 
-        this.renderer.domElement.style.cursor = 'crosshair';
+        this.renderer.domElement.style.cursor = 'none';
     }
 
     // =================== COMBAT ===================
@@ -2601,27 +2804,39 @@ export class Game3D {
         else if (partName === 'leg_left') mesh = parts.legLeft;
         if (!mesh) return;
 
-        // Get world position before removing
         const worldPos = new THREE.Vector3();
+        const worldQuat = new THREE.Quaternion();
+        const worldScale = new THREE.Vector3();
         mesh.getWorldPosition(worldPos);
+        mesh.getWorldQuaternion(worldQuat);
+        mesh.getWorldScale(worldScale);
+        const worldBox = new THREE.Box3().setFromObject(mesh);
+        const worldSize = worldBox.getSize(new THREE.Vector3());
 
-        // Remove from enemy model
-        enemy.model.remove(mesh);
+        // Hide on source model so respawn can restore intact mesh set.
+        mesh.visible = false;
+        if (!enemy._hiddenParts) enemy._hiddenParts = new Set();
+        enemy._hiddenParts.add(partName);
 
-        // Also remove weapon if arm is severed
+        // Hide weapon if arm is severed.
         if ((partName === 'arm_right') && parts.weapon) {
-            enemy.model.remove(parts.weapon);
+            parts.weapon.visible = false;
+            enemy._hiddenParts.add('weapon');
         }
 
         // Create physics body for the flying part
-        const color = mesh.material?.color?.getHex() || 0xFF0000;
+        const color = this._materialBaseColor(mesh.material, BLOOD_COLOR);
         const flyMesh = new THREE.Mesh(mesh.geometry.clone(), new THREE.MeshStandardMaterial({ color, roughness: 0.6 }));
         flyMesh.position.copy(worldPos);
+        flyMesh.quaternion.copy(worldQuat);
+        flyMesh.scale.copy(worldScale);
         flyMesh.castShadow = true;
         this.scene.add(flyMesh);
 
-        // Cannon body
-        const shape = new CANNON.Sphere(2);
+        const hx = THREE.MathUtils.clamp((worldSize.x || 1) * 0.28, 0.25, 2.6);
+        const hy = THREE.MathUtils.clamp((worldSize.y || 1) * 0.28, 0.25, 2.6);
+        const hz = THREE.MathUtils.clamp((worldSize.z || 1) * 0.28, 0.25, 2.6);
+        const shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz));
         const body = new CANNON.Body({
             mass: 1.5,
             shape,
@@ -2630,6 +2845,7 @@ export class Game3D {
             linearDamping: 0.3,
             angularDamping: 0.4
         });
+        body.quaternion.set(worldQuat.x, worldQuat.y, worldQuat.z, worldQuat.w);
 
         // Impulse away from hit direction
         const force = 30;
@@ -2648,8 +2864,20 @@ export class Game3D {
         this.physicsWorld.addBody(body);
         this.ragdollParts.push({ mesh: flyMesh, body, born: performance.now() });
 
-        // Blood splatter particles
-        this._bloodSplatter(worldPos, hitAngle);
+        this._spawnBloodImpact(worldPos.clone(), hitAngle, {
+            count: 16,
+            speed: 6.5,
+            upward: 5.5,
+            lifeMs: 1200,
+            poolChance: 0.75,
+            poolSizeMin: 0.22,
+            poolSizeMax: 0.75,
+        });
+        this._spawnBloodPool(worldPos, {
+            radius: THREE.MathUtils.clamp((worldSize.x + worldSize.z) * 0.2, 0.4, 1.3),
+            opacity: 0.46,
+            lifeMs: BLOOD_POOL_LIFETIME_MS * 0.8,
+        });
 
         // Apply debuffs
         if (partName.startsWith('leg')) {
@@ -2669,31 +2897,165 @@ export class Game3D {
     }
 
     _bloodSplatter(pos, angle) {
-        const count = 12;
+        this._spawnBloodImpact(pos, angle, {
+            count: 12,
+            speed: 5.8,
+            upward: 4.1,
+            lifeMs: 980,
+            poolChance: 0.66,
+            poolSizeMin: 0.2,
+            poolSizeMax: 0.72,
+        });
+    }
+
+    _spawnBloodImpact(pos, angle = 0, options = {}) {
+        const count = options.count ?? 10;
+        const speed = options.speed ?? 4.8;
+        const upward = options.upward ?? 3.8;
+        const lifeMs = options.lifeMs ?? 900;
+        const poolChance = options.poolChance ?? 0.6;
+        const poolSizeMin = options.poolSizeMin ?? 0.18;
+        const poolSizeMax = options.poolSizeMax ?? 0.7;
+
         for (let i = 0; i < count; i++) {
-            const geo = new THREE.SphereGeometry(0.3 + Math.random() * 0.5, 4, 4);
-            const mat = new THREE.MeshBasicMaterial({ color: 0xCC0000 });
-            const p = new THREE.Mesh(geo, mat);
-            p.position.copy(pos);
-            this.scene.add(p);
+            const radius = 0.13 + Math.random() * 0.33;
+            const mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(radius, 5, 4),
+                new THREE.MeshStandardMaterial({
+                    color: BLOOD_COLOR,
+                    roughness: 0.9,
+                    metalness: 0.02,
+                    emissive: 0x140204,
+                    emissiveIntensity: 0.25,
+                    transparent: true,
+                    opacity: 0.92,
+                })
+            );
+            mesh.position.copy(pos);
+            mesh.position.x += (Math.random() - 0.5) * 0.9;
+            mesh.position.z += (Math.random() - 0.5) * 0.9;
+            mesh.castShadow = false;
+            mesh.receiveShadow = false;
+            this.scene.add(mesh);
 
-            const vx = Math.sin(angle) * 3 + (Math.random() - 0.5) * 5;
-            const vy = 2 + Math.random() * 4;
-            const vz = Math.cos(angle) * 3 + (Math.random() - 0.5) * 5;
-            const start = performance.now();
-            const life = 800 + Math.random() * 600;
+            const spray = (Math.random() - 0.5) * 1.4;
+            this.bloodParticles.push({
+                mesh,
+                vx: Math.sin(angle + spray) * (speed * (0.55 + Math.random() * 0.75)),
+                vy: upward * (0.55 + Math.random() * 0.9),
+                vz: Math.cos(angle + spray) * (speed * (0.55 + Math.random() * 0.75)),
+                born: performance.now(),
+                lifeMs: lifeMs * (0.75 + Math.random() * 0.5),
+                poolChance,
+                poolSizeMin,
+                poolSizeMax,
+            });
+            if (this.bloodParticles.length > 340) {
+                const old = this.bloodParticles.shift();
+                if (old?.mesh) {
+                    this.scene.remove(old.mesh);
+                    old.mesh.geometry?.dispose?.();
+                    old.mesh.material?.dispose?.();
+                }
+            }
+        }
+    }
 
-            const anim = () => {
-                const t = (performance.now() - start) / life;
-                if (t >= 1) { this.scene.remove(p); p.geometry.dispose(); p.material.dispose(); return; }
-                p.position.x += vx * 0.016;
-                p.position.y += (vy - t * 12) * 0.016; // Gravity
-                p.position.z += vz * 0.016;
-                p.material.opacity = 1 - t;
-                p.material.transparent = true;
-                requestAnimationFrame(anim);
-            };
-            anim();
+    _spawnBloodPool(pos, options = {}) {
+        const radius = options.radius ?? (0.45 + Math.random() * 0.5);
+        const opacity = options.opacity ?? 0.48;
+        const lifeMs = options.lifeMs ?? BLOOD_POOL_LIFETIME_MS;
+        const x = pos.x;
+        const z = pos.z;
+        const groundY = Math.max(this._getTerrainHeight(x, z), this._getArenaFloorHeight(x, z));
+
+        const pool = new THREE.Mesh(
+            new THREE.CircleGeometry(radius, 20),
+            new THREE.MeshStandardMaterial({
+                color: 0x2f0407,
+                roughness: 0.98,
+                metalness: 0.0,
+                transparent: true,
+                opacity,
+                depthWrite: false,
+                polygonOffset: true,
+                polygonOffsetFactor: -2,
+            })
+        );
+        pool.rotation.x = -Math.PI / 2;
+        pool.rotation.z = Math.random() * Math.PI * 2;
+        pool.position.set(x, groundY + 0.045, z);
+        pool.receiveShadow = true;
+        this.scene.add(pool);
+
+        this.bloodPools.push({
+            mesh: pool,
+            born: performance.now(),
+            lifeMs,
+            baseOpacity: opacity,
+        });
+        if (this.bloodPools.length > 220) {
+            const old = this.bloodPools.shift();
+            if (old?.mesh) {
+                this.scene.remove(old.mesh);
+                old.mesh.geometry?.dispose?.();
+                old.mesh.material?.dispose?.();
+            }
+        }
+    }
+
+    _updateBloodFx(dt) {
+        const now = performance.now();
+
+        for (let i = this.bloodParticles.length - 1; i >= 0; i--) {
+            const p = this.bloodParticles[i];
+            const ageMs = now - p.born;
+            const t = ageMs / Math.max(1, p.lifeMs);
+
+            p.vy -= BLOOD_PARTICLE_GRAVITY * dt;
+            p.vx *= 0.985;
+            p.vz *= 0.985;
+            p.mesh.position.x += p.vx * dt;
+            p.mesh.position.y += p.vy * dt;
+            p.mesh.position.z += p.vz * dt;
+
+            const groundY = Math.max(this._getTerrainHeight(p.mesh.position.x, p.mesh.position.z), this._getArenaFloorHeight(p.mesh.position.x, p.mesh.position.z)) + 0.05;
+            const settled = p.mesh.position.y <= groundY;
+            if (settled || t >= 1) {
+                if (settled && Math.random() < (p.poolChance ?? 0.6)) {
+                    const radius = (p.poolSizeMin ?? 0.2) + Math.random() * Math.max(0.01, (p.poolSizeMax ?? 0.7) - (p.poolSizeMin ?? 0.2));
+                    this._spawnBloodPool(p.mesh.position, {
+                        radius,
+                        opacity: 0.26 + Math.random() * 0.28,
+                        lifeMs: BLOOD_POOL_LIFETIME_MS * (0.6 + Math.random() * 0.9),
+                    });
+                }
+                this.scene.remove(p.mesh);
+                p.mesh.geometry?.dispose?.();
+                p.mesh.material?.dispose?.();
+                this.bloodParticles.splice(i, 1);
+                continue;
+            }
+
+            if (p.mesh.material) p.mesh.material.opacity = Math.max(0.05, 1 - t);
+        }
+
+        for (let i = this.bloodPools.length - 1; i >= 0; i--) {
+            const pool = this.bloodPools[i];
+            const ageMs = now - pool.born;
+            const life = Math.max(1, pool.lifeMs);
+            if (ageMs >= life) {
+                this.scene.remove(pool.mesh);
+                pool.mesh.geometry?.dispose?.();
+                pool.mesh.material?.dispose?.();
+                this.bloodPools.splice(i, 1);
+                continue;
+            }
+            const fadeStart = life * 0.68;
+            if (ageMs > fadeStart && pool.mesh.material) {
+                const t = (ageMs - fadeStart) / Math.max(1, life - fadeStart);
+                pool.mesh.material.opacity = pool.baseOpacity * (1 - t);
+            }
         }
     }
 
@@ -2883,12 +3245,32 @@ export class Game3D {
         if (targetModel) {
             this._flashPlayerModel(targetModel);
             this._floatDmg(targetModel.position, safeDmg, '#FF6B6B');
+            this._spawnBloodImpact(targetModel.position.clone().add(new THREE.Vector3(0, 8, 0)), this.playerModel.rotation.y, {
+                count: 8,
+                speed: 4.8,
+                upward: 3.5,
+                lifeMs: 900,
+                poolChance: 0.55,
+            });
         } else if (worldPos) {
             this._floatDmg(worldPos, safeDmg, '#FF6B6B');
+            this._spawnBloodImpact(new THREE.Vector3(worldPos.x, 8, worldPos.z), this.playerModel.rotation.y, {
+                count: 7,
+                speed: 4.6,
+                upward: 3.2,
+                lifeMs: 880,
+                poolChance: 0.52,
+            });
         }
 
         const state = this.remotePlayers[targetId];
-        if (state) state.hp = Math.max(0, (state.hp || state.max_hp || 100) - safeDmg);
+        if (state) {
+            const prevHp = state.hp || state.max_hp || 100;
+            state.hp = Math.max(0, prevHp - safeDmg);
+            if (prevHp > 0 && state.hp <= 0 && targetModel) {
+                this._spawnBloodPool(targetModel.position, { radius: 2.4, opacity: 0.5 });
+            }
+        }
 
         broadcastPlayerHit({
             attackerId: this.user.id,
@@ -2914,13 +3296,23 @@ export class Game3D {
         if (targetId === this.user.id) {
             if (this.isDead) return;
             if (performance.now() < this.spawnProtectedUntil) return;
+            const prevHp = this.user.hp || 100;
             this.user.hp = Math.max(0, (this.user.hp || 100) - dmg);
             this._floatDmg(this.playerModel.position, dmg, '#FF4B4B');
+            this._spawnBloodImpact(this.playerModel.position.clone().add(new THREE.Vector3(0, 9, 0)), this.playerModel.rotation.y + Math.PI, {
+                count: 11,
+                speed: 5.4,
+                upward: 4.3,
+                lifeMs: 980,
+                poolChance: 0.62,
+            });
+            this.playerBleedingUntil = performance.now() + 900;
+            this.playerNextBleedAt = 0;
             this._triggerScreenFlash('#FF0000', 180);
             this._triggerHitFreeze(40);
             this.shakeIntensity = 4;
             if (window.updateHUD) window.updateHUD();
-            if (this.user.hp <= 0) this._handleSelfDeath(payload.attackerId);
+            if (prevHp > 0 && this.user.hp <= 0) this._handleSelfDeath(payload.attackerId);
             return;
         }
 
@@ -2931,7 +3323,22 @@ export class Game3D {
             this._floatDmg(model.position, dmg, '#FF7070');
         }
         const state = this.remotePlayers[targetId];
-        if (state) state.hp = Math.max(0, (state.hp || state.max_hp || 100) - dmg);
+        if (state) {
+            const prevHp = state.hp || state.max_hp || 100;
+            state.hp = Math.max(0, prevHp - dmg);
+            if (model) {
+                this._spawnBloodImpact(model.position.clone().add(new THREE.Vector3(0, 8, 0)), this.playerModel.rotation.y, {
+                    count: 8,
+                    speed: 4.7,
+                    upward: 3.3,
+                    lifeMs: 910,
+                    poolChance: 0.52,
+                });
+                if (prevHp > 0 && state.hp <= 0) {
+                    this._spawnBloodPool(model.position, { radius: 2.6, opacity: 0.52 });
+                }
+            }
+        }
     }
 
     _rememberProcessedHit(hitId) {
@@ -2959,6 +3366,16 @@ export class Game3D {
         this.isDead = true;
         this.deadUntil = performance.now() + PVP_RESPAWN_MS;
         this.user.hp = 0;
+        this.playerBleedingUntil = 0;
+        this.playerNextBleedAt = 0;
+        this._spawnBloodImpact(this.playerModel.position.clone().add(new THREE.Vector3(0, 9, 0)), this.playerModel.rotation.y + Math.PI, {
+            count: 18,
+            speed: 6.3,
+            upward: 5.5,
+            lifeMs: 1200,
+            poolChance: 0.72,
+        });
+        this._spawnBloodPool(this.playerModel.position, { radius: 3.6, opacity: 0.54, lifeMs: BLOOD_POOL_LIFETIME_MS + 12000 });
         if (window.updateHUD) window.updateHUD();
         this._showNotification(`💀 Тебя убил игрок #${attackerId || '?'}. Возрождение...`);
     }
@@ -2976,6 +3393,8 @@ export class Game3D {
         this.user.isJumping = false;
         this.isDead = false;
         this.deadUntil = 0;
+        this.playerBleedingUntil = 0;
+        this.playerNextBleedAt = 0;
         this.spawnProtectedUntil = performance.now() + PVP_RESPAWN_PROTECTION_MS;
         if (window.updateHUD) window.updateHUD();
         this._showNotification('⚔️ Возрождение. 2.5с неуязвимости.');
@@ -2986,8 +3405,17 @@ export class Game3D {
         enemy.hp -= amount;
         enemy._lastHitAngle = hitAngle || 0;
         enemy._lastSwingDir = swingDir || 'right';
+        enemy._bleedingUntil = performance.now() + 1000 + Math.random() * 400;
+        enemy._nextBleedAt = 0;
         this._flashMob(enemy);
         this._floatDmg(enemy.model.position, amount, '#FFD700');
+        this._spawnBloodImpact(enemy.model.position.clone().add(new THREE.Vector3(0, 7, 0)), hitAngle || enemy.model.rotation.y, {
+            count: 8,
+            speed: 4.6,
+            upward: 3.6,
+            lifeMs: 900,
+            poolChance: 0.56,
+        });
         broadcastMobHit({ mobId: enemy.def.id, dmg: amount });
         if (enemy.hp <= 0) this._killMob(enemy, true);
     }
@@ -2999,6 +3427,8 @@ export class Game3D {
     _killMob(enemy, isLocal) {
         enemy.alive = false;
         const pos = enemy.model.position.clone();
+        enemy._bleedingUntil = 0;
+        enemy._nextBleedAt = 0;
 
         // Spawn ragdoll with physics!
         this._createRagdoll(enemy, enemy._lastHitAngle || 0, enemy._lastSwingDir || 'right');
@@ -3017,7 +3447,17 @@ export class Game3D {
         setTimeout(() => {
             enemy.hp = enemy.maxHp;
             enemy.alive = true;
+            enemy._dismembered = {};
             enemy.model.scale.set(1, 1, 1);
+            const parts = enemy.model.userData.parts || {};
+            Object.values(parts).forEach((part) => {
+                if (Array.isArray(part)) {
+                    part.forEach((mesh) => { if (mesh?.isObject3D) mesh.visible = true; });
+                } else if (part?.isObject3D) {
+                    part.visible = true;
+                }
+            });
+            if (enemy._hiddenParts?.clear) enemy._hiddenParts.clear();
             enemy.model.position.set(
                 enemy.def.x,
                 Math.max(this._getTerrainHeight(enemy.def.x, enemy.def.z), this._getArenaFloorHeight(enemy.def.x, enemy.def.z)) + (enemy.model.userData.groundOffset || 0),
@@ -3191,7 +3631,20 @@ export class Game3D {
             },
             (payload) => {
                 const e = this.enemies.find(e => e.def.id === payload.mobId);
-                if (e && e.alive) { e.hp -= payload.dmg; this._flashMob(e); if (e.hp <= 0) this._killMob(e, false); }
+                if (e && e.alive) {
+                    e.hp -= payload.dmg;
+                    e._bleedingUntil = performance.now() + 700;
+                    e._nextBleedAt = 0;
+                    this._flashMob(e);
+                    this._spawnBloodImpact(e.model.position.clone().add(new THREE.Vector3(0, 7, 0)), e.model.rotation.y, {
+                        count: 6,
+                        speed: 4.0,
+                        upward: 3.1,
+                        lifeMs: 760,
+                        poolChance: 0.52,
+                    });
+                    if (e.hp <= 0) this._killMob(e, false);
+                }
             },
             (payload) => {
                 this._onPlayerHit(payload);
@@ -3732,6 +4185,19 @@ export class Game3D {
             }
         }
 
+        if (this.playerBleedingUntil > now && now >= (this.playerNextBleedAt || 0)) {
+            this.playerNextBleedAt = now + 110 + Math.random() * 120;
+            this._spawnBloodImpact(this.playerModel.position.clone().add(new THREE.Vector3(0, 5.8, 0)), this.playerModel.rotation.y + Math.PI, {
+                count: 2,
+                speed: 1.8,
+                upward: 0.8,
+                lifeMs: 460,
+                poolChance: 1,
+                poolSizeMin: 0.14,
+                poolSizeMax: 0.35,
+            });
+        }
+
         // HP bar
         const pct = (this.user.hp || 100) / (this.user.max_hp || 100);
         this._setHPBarValue(this.hpBar, pct);
@@ -3748,6 +4214,19 @@ export class Game3D {
             const dist = Math.hypot(px - ex, pz - ez);
             const parts = e.model.userData.parts || {};
             const type = e.def.type;
+
+            if (e._bleedingUntil > now && now >= (e._nextBleedAt || 0)) {
+                e._nextBleedAt = now + 120 + Math.random() * 130;
+                this._spawnBloodImpact(e.model.position.clone().add(new THREE.Vector3(0, 5.2, 0)), e.model.rotation.y + Math.PI, {
+                    count: 2,
+                    speed: 1.7,
+                    upward: 0.75,
+                    lifeMs: 440,
+                    poolChance: 1,
+                    poolSizeMin: 0.12,
+                    poolSizeMax: 0.33,
+                });
+            }
 
             // Update animation phase
             e.animPhase += dt * 5;
@@ -3813,12 +4292,24 @@ export class Game3D {
                         }
                         this.user.hp = Math.max(0, (this.user.hp || 100) - dmg);
                         this._floatDmg(this.playerModel.position, dmg, '#FF4B4B');
+                        this._spawnBloodImpact(this.playerModel.position.clone().add(new THREE.Vector3(0, 9, 0)), a + Math.PI, {
+                            count: 10,
+                            speed: 5.2,
+                            upward: 4.1,
+                            lifeMs: 980,
+                            poolChance: 0.62,
+                        });
+                        this.playerBleedingUntil = now + 900;
+                        this.playerNextBleedAt = 0;
                         if (window.updateHUD) window.updateHUD();
                         if (this.user.hp <= 0) {
                             this._triggerSlowMo(0.5, 0.1);
                             this._triggerScreenFlash('#FF0000', 500);
                             this.user.hp = this.user.max_hp || 100;
-                            this.playerModel.position.set(1500, 0, 1500);
+                            this._spawnBloodPool(this.playerModel.position, { radius: 3.1, opacity: 0.52, lifeMs: BLOOD_POOL_LIFETIME_MS + 9000 });
+                            this.playerModel.position.set(1500, this._getPlayerGroundTargetY(1500, 1500), 1500);
+                            this.playerBleedingUntil = 0;
+                            this.playerNextBleedAt = 0;
                             this._showNotification('💀 Ты погиб!');
                         }
                     }
@@ -4355,11 +4846,23 @@ export class Game3D {
                     }
                     this.user.hp = Math.max(0, (this.user.hp || 100) - dmg);
                     this._floatDmg(this.playerModel.position, dmg, '#FF6BC8');
+                    this._spawnBloodImpact(this.playerModel.position.clone().add(new THREE.Vector3(0, 9, 0)), Math.atan2(-p.vx, -p.vz), {
+                        count: 9,
+                        speed: 4.9,
+                        upward: 3.9,
+                        lifeMs: 920,
+                        poolChance: 0.6,
+                    });
+                    this.playerBleedingUntil = performance.now() + 900;
+                    this.playerNextBleedAt = 0;
                     if (window.updateHUD) window.updateHUD();
                     if (this.user.hp <= 0) {
                         this._triggerScreenFlash('#FF0000', 450);
                         this.user.hp = this.user.max_hp || 100;
-                        this.playerModel.position.set(1500, 0, 1500);
+                        this._spawnBloodPool(this.playerModel.position, { radius: 3.0, opacity: 0.52, lifeMs: BLOOD_POOL_LIFETIME_MS + 8000 });
+                        this.playerModel.position.set(1500, this._getPlayerGroundTargetY(1500, 1500), 1500);
+                        this.playerBleedingUntil = 0;
+                        this.playerNextBleedAt = 0;
                         this._showNotification('💀 Ты погиб!');
                     }
                     this._spawnProjectileWorldImpact(p);
@@ -4388,7 +4891,7 @@ export class Game3D {
                 for (const e of this.enemies) {
                     if (!e.alive) continue;
                     if (Math.hypot(e.model.position.x - p.mesh.position.x, e.model.position.z - p.mesh.position.z) < (e.def.isBoss ? 30 : 15)) {
-                        this._dmg(e, p.dmg);
+                        this._dmg(e, p.dmg, Math.atan2(p.vx, p.vz), 'thrust');
                         this.scene.remove(p.mesh);
                         this.projectiles.splice(i, 1);
                         consumed = true;
