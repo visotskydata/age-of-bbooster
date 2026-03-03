@@ -195,6 +195,7 @@ export class Game3D {
         this.arenaColliders = [];
         this.mouseTurnDelta = 0;
         this.lookYaw = 0;
+        this.whirlSpinAngle = 0;
         this.lastMoveBroadcast = 0;
         this.localMoveSeq = 0;
         this.stamina = STAMINA_MAX;
@@ -204,6 +205,8 @@ export class Game3D {
         this.lastDashAt = 0;
         this.dashState = null;
         this.crosshairUI = null;
+        this.aimMarker = null;
+        this.aimDistance = 120;
         this.bloodParticles = [];
         this.bloodPools = [];
         this.playerBleedingUntil = 0;
@@ -2014,6 +2017,7 @@ export class Game3D {
         this.playerModel.add(this.hpBar);
         this.hpBar.position.y = 22;
         this._ensureCrosshairUI();
+        this._ensureAimMarker();
         this._ensureStaminaUI();
         this._ensureAbilityUI();
         this._updateStaminaUI(false);
@@ -2228,6 +2232,61 @@ export class Game3D {
         this.crosshairUI = dot;
     }
 
+    _ensureAimMarker() {
+        if (this.aimMarker) return;
+        const marker = new THREE.Group();
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(2.2, 3.4, 24),
+            new THREE.MeshBasicMaterial({
+                color: 0xfff2b0,
+                transparent: true,
+                opacity: 0.85,
+                depthWrite: false,
+                side: THREE.DoubleSide,
+            })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        const dot = new THREE.Mesh(
+            new THREE.CircleGeometry(0.7, 12),
+            new THREE.MeshBasicMaterial({
+                color: 0xffdf6a,
+                transparent: true,
+                opacity: 0.95,
+                depthWrite: false,
+                side: THREE.DoubleSide,
+            })
+        );
+        dot.rotation.x = -Math.PI / 2;
+        dot.position.y = 0.01;
+        marker.add(ring, dot);
+        marker.visible = true;
+        this.scene.add(marker);
+        this.aimMarker = marker;
+    }
+
+    _getForwardAimPoint(distance = this.aimDistance || 120) {
+        const angle = Number.isFinite(this.lookYaw) ? this.lookYaw : (this.playerModel?.rotation?.y || 0);
+        const px = this.playerModel?.position?.x || 0;
+        const pz = this.playerModel?.position?.z || 0;
+        const tx = px + Math.sin(angle) * distance;
+        const tz = pz + Math.cos(angle) * distance;
+        const ty = Math.max(this._getTerrainHeight(tx, tz), this._getArenaFloorHeight(tx, tz)) + 0.26;
+        return new THREE.Vector3(tx, ty, tz);
+    }
+
+    _updateAimMarker(time = performance.now()) {
+        if (!this.aimMarker || !this.playerModel) return;
+        if (this.isDead) {
+            this.aimMarker.visible = false;
+            return;
+        }
+        this.aimMarker.visible = true;
+        const point = this._getForwardAimPoint(this.aimDistance || 120);
+        this.aimMarker.position.copy(point);
+        const pulse = 0.92 + Math.sin(time * 0.01) * 0.08;
+        this.aimMarker.scale.setScalar(pulse);
+    }
+
     _ensureStaminaUI() {
         if (this.staminaUI?.root?.isConnected) return;
         const root = document.createElement('div');
@@ -2430,7 +2489,7 @@ export class Game3D {
 
     _getDashDirection(forwardAxis, strafeAxis) {
         if (forwardAxis === 0 && strafeAxis === 0) return null;
-        const rot = this.playerModel.rotation.y;
+        const rot = Number.isFinite(this.lookYaw) ? this.lookYaw : this.playerModel.rotation.y;
         const forwardX = Math.sin(rot);
         const forwardZ = Math.cos(rot);
         const rightX = Math.sin(rot + Math.PI * 0.5);
@@ -2697,7 +2756,7 @@ export class Game3D {
 
         const pos = this.playerModel.position;
         const attackOrigin = pos.clone();
-        const angle = this.playerModel.rotation.y;
+        const angle = Number.isFinite(this.lookYaw) ? this.lookYaw : this.playerModel.rotation.y;
         const baseDmg = (this.user.attack || 10) + (CLASS_DMG[cls] || 10);
         const swingDir = this._getSwingDirection();
 
@@ -2751,7 +2810,7 @@ export class Game3D {
         const now = performance.now();
         const cls = this.user.class || 'warrior';
         const pos = this.playerModel.position.clone();
-        const angle = this.playerModel.rotation.y;
+        const angle = Number.isFinite(this.lookYaw) ? this.lookYaw : this.playerModel.rotation.y;
 
         if (cls === 'mage') {
             const readyAt = this.abilityCooldowns.mageBurnReadyAt || 0;
@@ -2806,6 +2865,7 @@ export class Game3D {
             return;
         }
         this.abilityCooldowns.warriorWhirlReadyAt = now + WARRIOR_WHIRL_COOLDOWN_MS;
+        this.whirlSpinAngle = 0;
         this.warriorWhirlState = {
             active: true,
             until: now + WARRIOR_WHIRL_DURATION_MS,
@@ -2821,6 +2881,7 @@ export class Game3D {
         if (!this.warriorWhirlState?.active) return;
         if (now >= this.warriorWhirlState.until) {
             this.warriorWhirlState = null;
+            this.whirlSpinAngle = 0;
             this._updateAbilityUI();
             return;
         }
@@ -2835,7 +2896,7 @@ export class Game3D {
             if (!e.alive) return;
             const d = Math.hypot(e.model.position.x - pos.x, e.model.position.z - pos.z);
             if (d > (e.def.isBoss ? range + 10 : range)) return;
-            this._dmg(e, dmg, this.playerModel.rotation.y, 'right');
+            this._dmg(e, dmg, this.lookYaw, 'right');
         });
 
         Object.entries(this.others).forEach(([rawId, model]) => {
@@ -3772,6 +3833,7 @@ export class Game3D {
         this.playerBleedingUntil = 0;
         this.playerNextBleedAt = 0;
         this.warriorWhirlState = null;
+        this.whirlSpinAngle = 0;
         this._setGhostVisual(true);
         this._spawnSoulEmerge(this.playerModel.position);
         this._ensureGhostUI();
@@ -3812,6 +3874,7 @@ export class Game3D {
         this.deadUntil = 0;
         this.playerBleedingUntil = 0;
         this.playerNextBleedAt = 0;
+        this.whirlSpinAngle = 0;
         this.spawnProtectedUntil = performance.now() + PVP_RESPAWN_PROTECTION_MS;
         this._setGhostVisual(false);
         this._clearGhostUI();
@@ -4268,7 +4331,7 @@ export class Game3D {
             hp: this.user.hp || 0,
             x: Math.round(this.playerModel.position.x * 10) / 10,
             z: Math.round(this.playerModel.position.z * 10) / 10,
-            yaw: this.playerModel.rotation.y,
+            yaw: Number.isFinite(this.lookYaw) ? this.lookYaw : this.playerModel.rotation.y,
             at: Date.now(),
             seq: this.localMoveSeq,
         });
@@ -4635,20 +4698,22 @@ export class Game3D {
         this._updatePhysics(dt);
         this._updateBillboardBars();
         this._updateAbilityUI();
+        this._updateAimMarker(time);
 
         // Third-Person Over-the-Shoulder Camera logic
         if (this.playerModel) {
-            // Target position: player's back
-            const offset = new THREE.Vector3(0, 40, -100); // Back and up
+            // Over-the-shoulder camera: shifted and aimed ahead of the player.
+            const offset = new THREE.Vector3(24, 38, -104);
+            const cameraYaw = Number.isFinite(this.lookYaw) ? this.lookYaw : this.playerModel.rotation.y;
             // Apply player's rotation to offset
-            offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.playerModel.rotation.y);
+            offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
             const targetCamPos = this.playerModel.position.clone().add(offset);
 
             // Smoothly move camera
             this.camera.position.lerp(targetCamPos, 0.1);
 
-            // Look slightly ahead of player (at head height)
-            const lookTarget = this.playerModel.position.clone().add(new THREE.Vector3(0, 15, 0));
+            const lookTarget = this._getForwardAimPoint(this.aimDistance || 120);
+            lookTarget.y += 2.4;
             this.camera.lookAt(lookTarget);
 
             if (this.shakeIntensity > 0) {
@@ -4717,10 +4782,12 @@ export class Game3D {
             this.mouseTurnDelta = 0;
         }
         const turnT = 1 - Math.exp(-LOOK_SMOOTH_SPEED * dt);
-        this.playerModel.rotation.y = this._lerpAngle(this.playerModel.rotation.y, this.lookYaw, turnT);
         if (this.warriorWhirlState?.active) {
-            this.playerModel.rotation.y += dt * 11.5;
-            this.lookYaw = this.playerModel.rotation.y;
+            this.whirlSpinAngle = (this.whirlSpinAngle + dt * 11.5) % (Math.PI * 2);
+            this.playerModel.rotation.y = this.lookYaw + this.whirlSpinAngle;
+        } else {
+            this.whirlSpinAngle = 0;
+            this.playerModel.rotation.y = this._lerpAngle(this.playerModel.rotation.y, this.lookYaw, turnT);
         }
 
         let moveX = 0;
@@ -4729,7 +4796,7 @@ export class Game3D {
         if (dashActive) {
             isMoving = true;
         } else if (!dashStarted && (forwardAxis !== 0 || strafeAxis !== 0)) {
-            const rot = this.playerModel.rotation.y;
+            const rot = Number.isFinite(this.lookYaw) ? this.lookYaw : this.playerModel.rotation.y;
             const forwardX = Math.sin(rot);
             const forwardZ = Math.cos(rot);
             const rightX = Math.sin(rot + Math.PI * 0.5);
