@@ -207,6 +207,8 @@ export class Game3D {
         this.crosshairUI = null;
         this.aimMarker = null;
         this.aimDistance = 120;
+        this.uiInteractionMode = false;
+        this.playerPopupState = null;
         this.bloodParticles = [];
         this.bloodPools = [];
         this.playerBleedingUntil = 0;
@@ -2264,8 +2266,12 @@ export class Game3D {
         this.aimMarker = marker;
     }
 
+    _getAimYaw() {
+        return Number.isFinite(this.lookYaw) ? this.lookYaw : (this.playerModel?.rotation?.y || 0);
+    }
+
     _getForwardAimPoint(distance = this.aimDistance || 120) {
-        const angle = Number.isFinite(this.lookYaw) ? this.lookYaw : (this.playerModel?.rotation?.y || 0);
+        const angle = this._getAimYaw();
         const px = this.playerModel?.position?.x || 0;
         const pz = this.playerModel?.position?.z || 0;
         const tx = px + Math.sin(angle) * distance;
@@ -2274,9 +2280,21 @@ export class Game3D {
         return new THREE.Vector3(tx, ty, tz);
     }
 
+    _getCameraAimTarget(distance = this.aimDistance || 120) {
+        const angle = this._getAimYaw();
+        const px = this.playerModel?.position?.x || 0;
+        const py = this.playerModel?.position?.y || 0;
+        const pz = this.playerModel?.position?.z || 0;
+        const tx = px + Math.sin(angle) * distance;
+        const tz = pz + Math.cos(angle) * distance;
+        const groundY = Math.max(this._getTerrainHeight(tx, tz), this._getArenaFloorHeight(tx, tz));
+        const ty = Math.max(py + 10.5, groundY + 5.2);
+        return new THREE.Vector3(tx, ty, tz);
+    }
+
     _updateAimMarker(time = performance.now()) {
         if (!this.aimMarker || !this.playerModel) return;
-        if (this.isDead) {
+        if (this.isDead || this.uiInteractionMode) {
             this.aimMarker.visible = false;
             return;
         }
@@ -2686,9 +2704,64 @@ export class Game3D {
         });
     }
 
+    _clearMovementKeys() {
+        const movementCodes = [
+            'KeyW', 'KeyA', 'KeyS', 'KeyD',
+            'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight',
+            'ShiftLeft', 'Space', 'KeyQ',
+        ];
+        movementCodes.forEach((code) => { this.keys[code] = false; });
+        this.dashRequested = false;
+        this.mouseTurnDelta = 0;
+        if (this.mouseVelocity) {
+            this.mouseVelocity.x = 0;
+            this.mouseVelocity.y = 0;
+        }
+        if (this.isBlocking) this._endBlock();
+    }
+
+    _setUiInteractionMode(active) {
+        const next = !!active;
+        if (this.uiInteractionMode === next) return;
+        this.uiInteractionMode = next;
+        if (next) {
+            if (document.pointerLockElement === this.renderer.domElement) {
+                document.exitPointerLock?.();
+            }
+            this._clearMovementKeys();
+            this.renderer.domElement.style.cursor = 'auto';
+            if (this.crosshairUI) this.crosshairUI.style.opacity = '0';
+            this._showNotification('🖱️ Режим интерфейса (Tab — вернуться в бой)');
+            return;
+        }
+        this.renderer.domElement.style.cursor = 'none';
+        if (this.crosshairUI) this.crosshairUI.style.opacity = '1';
+        document.querySelectorAll('.hud-panel, .modal').forEach((node) => node.classList.add('hidden'));
+        document.querySelectorAll('.action-btn').forEach((node) => node.classList.remove('active'));
+        this.renderer.domElement.requestPointerLock?.();
+        this._showNotification('⚔️ Боевой режим');
+    }
+
+    _toggleUiInteractionMode() {
+        this._setUiInteractionMode(!this.uiInteractionMode);
+    }
+
     // =================== INPUT ===================
     _input() {
         document.addEventListener('keydown', e => {
+            const active = document.activeElement;
+            const isTyping = active && (
+                active.tagName === 'INPUT'
+                || active.tagName === 'TEXTAREA'
+                || active.isContentEditable
+            );
+            if (e.code === 'Tab' && !e.repeat) {
+                e.preventDefault();
+                this._toggleUiInteractionMode();
+                return;
+            }
+            if (isTyping) return;
+            if (this.uiInteractionMode) return;
             this.keys[e.code] = true;
             if (e.code === 'Space' && !e.repeat) this.dashRequested = true;
             if (e.code === 'KeyQ' && !e.repeat) this._startBlock();
@@ -2707,6 +2780,13 @@ export class Game3D {
             const rect = this.renderer.domElement.getBoundingClientRect();
             this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            if (this.uiInteractionMode || document.pointerLockElement !== this.renderer.domElement) {
+                this.mouseVelocity.x = 0;
+                this.mouseVelocity.y = 0;
+                this.lastMousePos.x = e.clientX;
+                this.lastMousePos.y = e.clientY;
+                return;
+            }
             const hasLast = this.lastMousePos.x !== null && this.lastMousePos.y !== null;
             const dx = hasLast ? (e.movementX || (e.clientX - this.lastMousePos.x)) : 0;
             const dy = hasLast ? (e.movementY || (e.clientY - this.lastMousePos.y)) : 0;
@@ -2718,6 +2798,7 @@ export class Game3D {
         });
 
         this.renderer.domElement.addEventListener('mousedown', e => {
+            if (this.uiInteractionMode) return;
             if (e.button === 0) this._attack();
             if (e.button === 2) this._useClassAbility();
             if (document.pointerLockElement !== this.renderer.domElement) {
@@ -2729,6 +2810,13 @@ export class Game3D {
 
         document.addEventListener('keydown', e => {
             if (e.code === 'KeyE') this._interact();
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            const isLocked = document.pointerLockElement === this.renderer.domElement;
+            if (!isLocked && !this.uiInteractionMode) {
+                this._setUiInteractionMode(true);
+            }
         });
 
         this.renderer.domElement.style.cursor = 'none';
@@ -2746,7 +2834,7 @@ export class Game3D {
     }
 
     _attack() {
-        if (this.isDead) return;
+        if (this.isDead || this.uiInteractionMode) return;
         const now = performance.now();
         const cls = this.user.class || 'warrior';
         const cd = CLASS_ATK_CD[cls] || 600;
@@ -2756,7 +2844,7 @@ export class Game3D {
 
         const pos = this.playerModel.position;
         const attackOrigin = pos.clone();
-        const angle = Number.isFinite(this.lookYaw) ? this.lookYaw : this.playerModel.rotation.y;
+        const angle = this._getAimYaw();
         const baseDmg = (this.user.attack || 10) + (CLASS_DMG[cls] || 10);
         const swingDir = this._getSwingDirection();
 
@@ -2804,13 +2892,13 @@ export class Game3D {
     }
 
     _useClassAbility() {
-        if (this.isDead) return;
+        if (this.isDead || this.uiInteractionMode) return;
         if (!this._canUseClassAbility()) return;
 
         const now = performance.now();
         const cls = this.user.class || 'warrior';
         const pos = this.playerModel.position.clone();
-        const angle = Number.isFinite(this.lookYaw) ? this.lookYaw : this.playerModel.rotation.y;
+        const angle = this._getAimYaw();
 
         if (cls === 'mage') {
             const readyAt = this.abilityCooldowns.mageBurnReadyAt || 0;
@@ -4202,59 +4290,96 @@ export class Game3D {
 
     // Public API for UI systems (chat/emotes)
     showSpeechBubble(text) {
-        this._showPlayerPopup(text, {
+        const safeText = String(text || '').trim().slice(0, 120);
+        if (!safeText) return;
+        const lifetime = Math.min(9000, 1800 + safeText.length * 56);
+        this._showPlayerPopup(safeText, {
             color: '#FFFFFF',
-            background: 'rgba(15, 20, 30, 0.86)',
-            lifetime: 1400,
+            background: 'rgba(255, 255, 255, 0.94)',
+            borderColor: 'rgba(24, 32, 44, 0.9)',
+            lifetime,
+            textShadow: 'none',
         });
     }
 
     // Public API for UI systems (chat/emotes)
     showEmote(emoteText) {
-        this._showPlayerPopup(emoteText, {
+        const safeText = String(emoteText || '').trim().slice(0, 120);
+        if (!safeText) return;
+        const lifetime = Math.min(3600, 1100 + safeText.length * 36);
+        this._showPlayerPopup(safeText, {
             color: '#FFD700',
-            background: 'rgba(0, 0, 0, 0.78)',
-            lifetime: 1000,
+            background: 'rgba(20, 20, 20, 0.9)',
+            borderColor: 'rgba(255, 215, 90, 0.88)',
+            lifetime,
         });
     }
 
     _showPlayerPopup(text, options = {}) {
         if (!this.playerModel || !text) return;
 
+        if (this.playerPopupState?.root?.isConnected) {
+            this.playerPopupState.root.remove();
+        }
+        this.playerPopupState = null;
+
         const color = options.color || '#FFFFFF';
         const background = options.background || 'rgba(0,0,0,0.8)';
+        const borderColor = options.borderColor || 'rgba(255, 255, 255, 0.35)';
         const lifetime = options.lifetime || 1200;
+        const textShadow = options.textShadow || '0 1px 2px rgba(0,0,0,.75)';
+        const worldOffsetY = options.worldOffsetY || 32;
 
-        const worldPos = this.playerModel.position.clone();
-        worldPos.y += 30;
-        const screen = this._worldToScreen(worldPos);
+        const root = document.createElement('div');
+        root.className = 'player-popup';
 
-        const div = document.createElement('div');
-        div.textContent = String(text).slice(0, 120);
-        div.style.cssText = [
-            'position:fixed',
-            `left:${screen.x}px`,
-            `top:${screen.y}px`,
-            'transform:translate(-50%,-50%)',
+        const bubble = document.createElement('div');
+        bubble.className = 'player-popup-cloud';
+        bubble.textContent = String(text).slice(0, 120);
+        bubble.style.cssText = [
             `color:${color}`,
             `background:${background}`,
-            'padding:6px 10px',
-            'border-radius:10px',
+            `border-color:${borderColor}`,
+            `text-shadow:${textShadow}`,
             'font:600 13px Inter, sans-serif',
-            'pointer-events:none',
-            'z-index:9999',
-            'text-shadow:0 1px 2px #000',
-            'white-space:nowrap',
-            'transition:transform 0.6s ease, opacity 0.6s ease',
         ].join(';');
 
-        document.body.appendChild(div);
-        requestAnimationFrame(() => {
-            div.style.transform = 'translate(-50%,-120%)';
-            div.style.opacity = '0';
-        });
+        const tail = document.createElement('div');
+        tail.className = 'player-popup-tail';
+        tail.style.cssText = `background:${background};border-color:${borderColor};`;
 
-        setTimeout(() => div.remove(), lifetime);
+        root.append(bubble, tail);
+        document.body.appendChild(root);
+
+        const now = performance.now();
+        this.playerPopupState = {
+            root,
+            bornAt: now,
+            expireAt: now + lifetime,
+            worldOffsetY,
+            fadeMs: Math.max(280, Math.min(900, lifetime * 0.28)),
+        };
+        this._updatePlayerPopup(now);
+    }
+
+    _updatePlayerPopup(time = performance.now()) {
+        const popup = this.playerPopupState;
+        if (!popup) return;
+        if (!popup.root?.isConnected || !this.playerModel || time >= popup.expireAt) {
+            popup.root?.remove?.();
+            this.playerPopupState = null;
+            return;
+        }
+
+        const worldPos = this.playerModel.position.clone();
+        worldPos.y += popup.worldOffsetY;
+        const screen = this._worldToScreen(worldPos);
+        const bob = Math.sin((time - popup.bornAt) * 0.008) * 2.4;
+        popup.root.style.left = `${screen.x}px`;
+        popup.root.style.top = `${screen.y - bob}px`;
+
+        const leftMs = popup.expireAt - time;
+        popup.root.style.opacity = `${THREE.MathUtils.clamp(leftMs / popup.fadeMs, 0, 1)}`;
     }
 
     // =================== INTERACT ===================
@@ -4699,21 +4824,17 @@ export class Game3D {
         this._updateBillboardBars();
         this._updateAbilityUI();
         this._updateAimMarker(time);
+        this._updatePlayerPopup(time);
 
-        // Third-Person Over-the-Shoulder Camera logic
+        // Third-person camera with centered aiming line.
         if (this.playerModel) {
-            // Over-the-shoulder camera: shifted and aimed ahead of the player.
-            const offset = new THREE.Vector3(24, 38, -104);
-            const cameraYaw = Number.isFinite(this.lookYaw) ? this.lookYaw : this.playerModel.rotation.y;
-            // Apply player's rotation to offset
+            const offset = new THREE.Vector3(0, 36, -96);
+            const cameraYaw = this._getAimYaw();
             offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
             const targetCamPos = this.playerModel.position.clone().add(offset);
-
-            // Smoothly move camera
             this.camera.position.lerp(targetCamPos, 0.1);
 
-            const lookTarget = this._getForwardAimPoint(this.aimDistance || 120);
-            lookTarget.y += 2.4;
+            const lookTarget = this._getCameraAimTarget(this.aimDistance || 120);
             this.camera.lookAt(lookTarget);
 
             if (this.shakeIntensity > 0) {

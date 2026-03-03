@@ -505,6 +505,38 @@ body {
     color: var(--text);
 }
 
+/* Player head popup (comic-like cloud) */
+.player-popup {
+    position: fixed;
+    transform: translate(-50%, -100%);
+    pointer-events: none;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    opacity: 1;
+    transition: opacity 0.18s linear;
+}
+.player-popup-cloud {
+    max-width: min(320px, calc(100vw - 32px));
+    padding: 8px 12px;
+    border-radius: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.45);
+    line-height: 1.35;
+    text-align: center;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+.player-popup-tail {
+    width: 12px;
+    height: 12px;
+    margin-top: -2px;
+    transform: rotate(45deg);
+    border-right: 2px solid rgba(255, 255, 255, 0.45);
+    border-bottom: 2px solid rgba(255, 255, 255, 0.45);
+}
+
 /* EMOTES PANEL */
 #emotes-panel {
     bottom: 80px;
