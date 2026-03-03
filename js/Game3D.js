@@ -43,9 +43,13 @@ const PROJECTILE_WORLD_RADIUS = { mage: 2.4, archer: 1.2 };
 const STRAFE_SPEED_MULT = 0.5;
 const SPRINT_SPEED_MULT = 1.45;
 const STAMINA_MAX = 100;
-const STAMINA_DRAIN_PER_SEC = 28;
+const STAMINA_DRAIN_PER_SEC = 14;
 const STAMINA_RECOVER_PER_SEC = 18;
 const STAMINA_RECOVER_DELAY_MS = 850;
+const DASH_COOLDOWN_MS = 750;
+const DASH_STAMINA_COST = { warrior: 26, archer: 24, mage: 30 };
+const DASH_DISTANCE = { warrior: 92, archer: 108, mage: 112 };
+const DASH_DURATION_MS = { warrior: 270, archer: 320 };
 const PREMIUM_MANIFEST_URL = 'assets/premium/manifest.json';
 const CLASS_ACTIONS = {
     warrior: {
@@ -179,6 +183,9 @@ export class Game3D {
         this.stamina = STAMINA_MAX;
         this.lastSprintAt = 0;
         this.staminaUI = null;
+        this.dashRequested = false;
+        this.lastDashAt = 0;
+        this.dashState = null;
 
         this._init();
         this._initPhysics();
@@ -1993,6 +2000,130 @@ export class Game3D {
             : 'linear-gradient(90deg,#52d97f,#e5c44a)';
     }
 
+    _resolveAndApplyPlayerMove(dx, dz) {
+        const nextX = this.playerModel.position.x + dx;
+        const nextZ = this.playerModel.position.z + dz;
+        const resolved = this._resolveArenaCollision(nextX, nextZ, PLAYER_COLLIDER_RADIUS);
+        this.playerModel.position.x = Math.max(10, Math.min(MAP - 10, resolved.x));
+        this.playerModel.position.z = Math.max(10, Math.min(MAP - 10, resolved.z));
+    }
+
+    _getDashDirection(forwardAxis, strafeAxis) {
+        if (forwardAxis === 0 && strafeAxis === 0) return null;
+        const rot = this.playerModel.rotation.y;
+        const forwardX = Math.sin(rot);
+        const forwardZ = Math.cos(rot);
+        const rightX = Math.sin(rot + Math.PI * 0.5);
+        const rightZ = Math.cos(rot + Math.PI * 0.5);
+        const x = forwardX * forwardAxis + rightX * strafeAxis;
+        const z = forwardZ * forwardAxis + rightZ * strafeAxis;
+        const len = Math.hypot(x, z) || 1;
+        return { x: x / len, z: z / len };
+    }
+
+    _spawnDashFlash(pos, color = 0xffffff, radius = 5.5) {
+        const flash = new THREE.Mesh(
+            new THREE.RingGeometry(radius * 0.35, radius, 20),
+            new THREE.MeshBasicMaterial({
+                color,
+                transparent: true,
+                opacity: 0.75,
+                depthWrite: false,
+                side: THREE.DoubleSide,
+            })
+        );
+        flash.position.set(pos.x, pos.y + 2.5, pos.z);
+        flash.rotation.x = -Math.PI / 2;
+        this.scene.add(flash);
+        const born = performance.now();
+        const life = 220;
+        const anim = () => {
+            const t = (performance.now() - born) / life;
+            if (t >= 1) {
+                this.scene.remove(flash);
+                flash.geometry.dispose();
+                flash.material.dispose();
+                return;
+            }
+            const s = 1 + t * 1.6;
+            flash.scale.set(s, s, s);
+            flash.material.opacity = 0.75 * (1 - t);
+            requestAnimationFrame(anim);
+        };
+        anim();
+    }
+
+    _tryStartDash(forwardAxis, strafeAxis) {
+        const cls = this.user.class || 'warrior';
+        if (!this.keys['ShiftLeft']) return false;
+        if (this.isDead || this.user.isJumping || this.dashState?.active) return false;
+        if (performance.now() - this.lastDashAt < DASH_COOLDOWN_MS) return false;
+
+        const dir = this._getDashDirection(forwardAxis, strafeAxis);
+        if (!dir) return false;
+
+        const staminaCost = DASH_STAMINA_COST[cls] || 24;
+        if (this.stamina < staminaCost) return false;
+        this.stamina = Math.max(0, this.stamina - staminaCost);
+        this.lastSprintAt = performance.now();
+        this.lastDashAt = performance.now();
+        this._updateStaminaUI(false);
+
+        if (cls === 'mage') {
+            const startPos = this.playerModel.position.clone();
+            this._spawnDashFlash(startPos, 0xa060ff, 6.2);
+            this._playOneShotAnim(this.playerModel, ['spellcast_raise', 'spellcast_shoot', 'spellcasting', 'cast'], { minLockMs: 130, lockMult: 0.45 });
+
+            const dist = DASH_DISTANCE.mage || 110;
+            this._resolveAndApplyPlayerMove(dir.x * dist, dir.z * dist);
+            this.playerModel.position.y = this._getPlayerGroundTargetY(this.playerModel.position.x, this.playerModel.position.z);
+            this._spawnDashFlash(this.playerModel.position.clone(), 0xd1a4ff, 7.5);
+            this._triggerScreenFlash('#b97dff', 90);
+            return true;
+        }
+
+        const dist = DASH_DISTANCE[cls] || 95;
+        const duration = DASH_DURATION_MS[cls] || 280;
+        this.dashState = {
+            active: true,
+            cls,
+            dir,
+            distance: dist,
+            duration,
+            elapsedMs: 0,
+            prevEase: 0,
+            lift: cls === 'archer' ? 8 : 0,
+        };
+
+        if (cls === 'warrior') {
+            this._playOneShotAnim(this.playerModel, ['dodge', 'roll', 'evade', 'jump'], { minLockMs: 170, lockMult: 0.5 });
+            this._spawnDashFlash(this.playerModel.position.clone(), 0xd6d6d6, 5.6);
+        } else {
+            this._playOneShotAnim(this.playerModel, ['jump', 'dodge', 'evade', 'leap'], { minLockMs: 170, lockMult: 0.5 });
+            this._spawnDashFlash(this.playerModel.position.clone(), 0x8fd6ff, 5.9);
+        }
+        return true;
+    }
+
+    _updateDash(dt) {
+        if (!this.dashState?.active) return false;
+        const st = this.dashState;
+        st.elapsedMs += dt * 1000;
+        const t = Math.min(1, st.elapsedMs / Math.max(1, st.duration));
+        const ease = 1 - Math.pow(1 - t, 2);
+        const step = Math.max(0, ease - (st.prevEase || 0));
+        st.prevEase = ease;
+        const travel = st.distance * step;
+        this._resolveAndApplyPlayerMove(st.dir.x * travel, st.dir.z * travel);
+        st.progress = t;
+
+        if (t >= 1) {
+            this.dashState = null;
+            return false;
+        }
+        return true;
+    }
+
     _createLabel(text, parent) {
         // Using a canvas texture for the name
         const canvas = document.createElement('canvas');
@@ -2078,7 +2209,10 @@ export class Game3D {
 
     // =================== INPUT ===================
     _input() {
-        document.addEventListener('keydown', e => { this.keys[e.code] = true; });
+        document.addEventListener('keydown', e => {
+            this.keys[e.code] = true;
+            if (e.code === 'Space' && !e.repeat) this.dashRequested = true;
+        });
         document.addEventListener('keyup', e => { this.keys[e.code] = false; });
 
         // Mouse tracking for directional swings
@@ -3487,12 +3621,6 @@ export class Game3D {
         let strafeAxis = 0;
         const now = performance.now();
 
-        // Space to jump
-        if (this.keys['Space'] && !this.user.isJumping) {
-            this.user.isJumping = true;
-            this.user.velocityY = 60; // Jump strength
-        }
-
         if (this.keys['KeyW'] || this.keys['ArrowUp']) forwardAxis += 1;
         if (this.keys['KeyS'] || this.keys['ArrowDown']) forwardAxis -= 1;
         // Natural FPS strafe mapping.
@@ -3500,8 +3628,20 @@ export class Game3D {
         if (this.keys['KeyD'] || this.keys['ArrowRight']) strafeAxis -= 1;
         const hasMoveInput = forwardAxis !== 0 || strafeAxis !== 0;
 
+        let dashStarted = false;
+        if (this.dashRequested) {
+            dashStarted = this._tryStartDash(forwardAxis, strafeAxis);
+            this.dashRequested = false;
+        }
+
+        // Space to jump (only when not trying dash).
+        if (!dashStarted && !this.dashState?.active && !this.keys['ShiftLeft'] && this.keys['Space'] && !this.user.isJumping) {
+            this.user.isJumping = true;
+            this.user.velocityY = 60; // Jump strength
+        }
+
         let isSprinting = false;
-        const sprintRequested = hasMoveInput && this.keys['ShiftLeft'] && forwardAxis > 0;
+        const sprintRequested = hasMoveInput && this.keys['ShiftLeft'] && forwardAxis > 0 && !this.dashState?.active && !dashStarted;
         if (sprintRequested && this.stamina > 0.2) {
             isSprinting = true;
             this.lastSprintAt = now;
@@ -3524,7 +3664,10 @@ export class Game3D {
 
         let moveX = 0;
         let moveZ = 0;
-        if (forwardAxis !== 0 || strafeAxis !== 0) {
+        const dashActive = this._updateDash(dt);
+        if (dashActive) {
+            isMoving = true;
+        } else if (!dashStarted && (forwardAxis !== 0 || strafeAxis !== 0)) {
             const rot = this.playerModel.rotation.y;
             const forwardX = Math.sin(rot);
             const forwardZ = Math.cos(rot);
@@ -3540,20 +3683,10 @@ export class Game3D {
 
             isMoving = true;
             const spd = this.playerSpeed * dt * (isSprinting ? SPRINT_SPEED_MULT : 1.0);
-            const nextX = this.playerModel.position.x + moveX * spd;
-            const nextZ = this.playerModel.position.z + moveZ * spd;
-            const resolved = this._resolveArenaCollision(nextX, nextZ, PLAYER_COLLIDER_RADIUS);
-            this.playerModel.position.x = resolved.x;
-            this.playerModel.position.z = resolved.z;
+            this._resolveAndApplyPlayerMove(moveX * spd, moveZ * spd);
         } else {
-            const resolved = this._resolveArenaCollision(this.playerModel.position.x, this.playerModel.position.z, PLAYER_COLLIDER_RADIUS);
-            this.playerModel.position.x = resolved.x;
-            this.playerModel.position.z = resolved.z;
+            this._resolveAndApplyPlayerMove(0, 0);
         }
-
-        // Boundary constraints
-        this.playerModel.position.x = Math.max(10, Math.min(MAP - 10, this.playerModel.position.x));
-        this.playerModel.position.z = Math.max(10, Math.min(MAP - 10, this.playerModel.position.z));
 
         const groundHeight = this._getPlayerGroundTargetY(this.playerModel.position.x, this.playerModel.position.z);
 
@@ -3567,7 +3700,10 @@ export class Game3D {
                 this.user.velocityY = 0;
             }
         } else {
-            this.playerModel.position.y = groundHeight;
+            const dashLift = (this.dashState?.active && this.dashState?.cls === 'archer')
+                ? Math.sin(Math.PI * (this.dashState.progress || 0)) * (this.dashState.lift || 0)
+                : 0;
+            this.playerModel.position.y = groundHeight + dashLift;
         }
 
         // Momentum Feel (Optional scaling or bouncing)
@@ -3583,6 +3719,8 @@ export class Game3D {
 
                 if (this.user.isJumping) {
                     targetAnimName = 'jump';
+                } else if (this.dashState?.active) {
+                    targetAnimName = this.dashState.cls === 'warrior' ? 'run' : 'jump';
                 } else if (isMoving) {
                     if (forwardAxis < -0.2) {
                         targetAnimName = 'walk';
